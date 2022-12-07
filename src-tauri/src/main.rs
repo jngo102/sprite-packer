@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::{mpsc, Mutex, MutexGuard};
 use std::thread;
-use tauri::{async_runtime, Manager, State};
+use tauri::{async_runtime, command, Manager, State};
 
 struct AppState(Mutex<App>);
 
@@ -88,6 +88,7 @@ fn setup_app() {
     let app = tauri::Builder::default()
         .manage(app_state)
         .invoke_handler(tauri::generate_handler![
+            debug,
             get_collection,
             get_collection_list,
         ])
@@ -137,8 +138,6 @@ fn setup_app() {
         }
         _ => {}
     });
-
-    thread::spawn(move || {});
 }
 
 fn select_sprites_path(mut app: MutexGuard<App>) {
@@ -165,7 +164,12 @@ fn select_sprites_path(mut app: MutexGuard<App>) {
     info!("Selected sprites path as: {}", app.settings.sprites_path);
 }
 
-#[tauri::command]
+#[command]
+fn debug(msg: String) {
+    info!("{}", msg);
+}
+
+#[command]
 fn get_collection(collection_name: String, state: State<AppState>) -> Collection {
     let app_state = state.0.lock().unwrap();
     match fs::read_dir(app_state.settings.sprites_path.clone()) {
@@ -177,11 +181,7 @@ fn get_collection(collection_name: String, state: State<AppState>) -> Collection
                             Ok(folder_name) => folder_name,
                             Err(e) => panic!("Failed to convert path to string: {:?}", e),
                         };
-                        let cln_name = match folder_name.split(".").collect::<Vec<_>>().last() {
-                            Some(name) => name.to_string(),
-                            None => panic!("Failed to get collection name."),
-                        };
-                        if cln_name == collection_name {
+                        if folder_name == collection_name {
                             let mut animations = Vec::new();
                             match fs::read_dir(collection_path.path()) {
                                 Ok(anim_paths) => {
@@ -263,8 +263,9 @@ fn get_collection(collection_name: String, state: State<AppState>) -> Collection
     panic!("Failed to find collection {:?}", collection_name);
 }
 
-#[tauri::command]
+#[command]
 fn get_collection_list(state: State<AppState>) -> Vec<String> {
+    info!("Called twice??");
     let app_state = state.0.lock().unwrap();
     let mut collections = Vec::new();
     match fs::read_dir(app_state.settings.sprites_path.clone()) {
@@ -273,12 +274,7 @@ fn get_collection_list(state: State<AppState>) -> Vec<String> {
                 match collection_path {
                     Ok(collection_path) => {
                         match collection_path.file_name().into_string() {
-                            Ok(folder_name) => {
-                                let collection_name = match folder_name.split(".").collect::<Vec<_>>().last() {
-                                    Some(name) => name.to_string(),
-                                    None => panic!("Failed to get collection name."),
-                                };
-                                info!("Collection name: {:?}", collection_name);
+                            Ok(collection_name) => {
                                 collections.push(collection_name);
                             },
                             Err(e) => panic!("Failed to convert path to string: {:?}", e),
@@ -291,5 +287,10 @@ fn get_collection_list(state: State<AppState>) -> Vec<String> {
         Err(e) => panic!("Failed to read directory: {}", e),
     }
 
+    let mut i = 0;
+    for collection in collections.clone() {
+        info!("Collection name {}: {:?}", i, collection);
+        i += 1;
+    }
     collections
 }
