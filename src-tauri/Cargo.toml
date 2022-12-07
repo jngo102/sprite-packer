@@ -1,0 +1,40 @@
+[package]
+name = "sprite-packer"
+version = "0.1.0"
+description = "A Tauri App"
+authors = ["jngo102"]
+license = "MIT"
+repository = "https://github.com/jngo102/sprite-packer"
+default-run = "sprite-packer"
+edition = "2021"
+rust-version = "1.59"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[build-dependencies]
+tauri-build = { version = "^1", features = [] }
+
+[dependencies]
+directories = "^4"
+eventual = "^0.1"
+log = "^0.4"
+native-dialog = "^0.6"
+rayon = "^1"
+serde_json = "^1"
+serde = { version = "^1", features = ["derive"] }
+simple-logging = "^2"
+tauri = { version = "^1", features = ["devtools"] }
+
+[features]
+# by default Tauri runs in production mode
+# when `tauri dev` runs it is executed with `cargo run --no-default-features` if `devPath` is an URL
+default = [ "custom-protocol" ]
+# this feature is used for production builds where `devPath` points to the filesystem
+# DO NOT remove this
+custom-protocol = [ "tauri/custom-protocol" ]
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
