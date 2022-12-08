@@ -91,6 +91,7 @@ fn setup_app() {
             debug,
             get_collection,
             get_collection_list,
+            get_sprites_path,
         ])
         .build(tauri::generate_context!())
         .expect("Failed to build tauri application.");
@@ -246,7 +247,6 @@ fn get_collection(collection_name: String, state: State<AppState>) -> Collection
                                     panic!("Failed to read directory {:?}: {}", folder_name, e)
                                 }
                             };
-                            info!("Returning collection: {}", collection_name);
                             return Collection {
                                 name: collection_name,
                                 animations,
@@ -265,7 +265,6 @@ fn get_collection(collection_name: String, state: State<AppState>) -> Collection
 
 #[command]
 fn get_collection_list(state: State<AppState>) -> Vec<String> {
-    info!("Called twice??");
     let app_state = state.0.lock().unwrap();
     let mut collections = Vec::new();
     match fs::read_dir(app_state.settings.sprites_path.clone()) {
@@ -287,10 +286,11 @@ fn get_collection_list(state: State<AppState>) -> Vec<String> {
         Err(e) => panic!("Failed to read directory: {}", e),
     }
 
-    let mut i = 0;
-    for collection in collections.clone() {
-        info!("Collection name {}: {:?}", i, collection);
-        i += 1;
-    }
     collections
+}
+
+#[command]
+fn get_sprites_path(state: State<AppState>) -> String {
+    let app_state = state.0.lock().unwrap();
+    app_state.settings.sprites_path.clone()
 }

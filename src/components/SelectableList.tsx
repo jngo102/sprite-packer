@@ -1,35 +1,55 @@
 import { Component } from 'react'
-import { ListBox } from 'primereact/listbox'
-import './SelectableList.css'
+import { Divider, Grid, List, ListItem, ListItemButton, ListItemText, ListSubheader } from '@mui/material'
 
 interface SelectableListProps {
-    title: string
     items: string[]
+    onSelectItem: any
+    selectedItem: string
+    title: string
 }
 
 interface SelectableListState {
-    selectedItem: string | undefined
+    onSelectItem: any
 }
 
 export default class SelectableList extends Component<SelectableListProps, SelectableListState> {
     constructor(props: SelectableListProps) {
         super(props)
         this.state = {
-            selectedItem: props.items?.at(0),
+            onSelectItem: props.onSelectItem
         }
     }
 
     render() {
         return (
-            <div className="card">
-                <ListBox filter
-                    filterPlaceholder={`Filter ${this.props.title}`}
-                    listStyle={{ height: '256px', overflowY: 'auto' }}
-                    onChange={(e) => this.setState({ selectedItem: e.value })}
-                    options={this.props.items}
-                    value={this.state.selectedItem}
-                />
-            </div>
+            <Grid item xs={4}>
+                <List dense
+                    disablePadding
+                    sx={{
+                        maxHeight: window.innerHeight / 2,
+                        overflowY: 'auto'
+                    }}>
+                    <ListSubheader>
+                        {this.props.title}
+                        <Divider />
+                    </ListSubheader>
+                    {this.props.items?.map(item => (
+                        <ListItem disablePadding>
+                            <ListItemButton key={item}
+                                onClick={_ => this.updateSelected(item)}
+                                selected={this.props.selectedItem == item} >
+                                <ListItemText primary={item} />
+                            </ListItemButton>
+                        </ListItem>
+                    ))}
+                </List>
+            </Grid>
         )
+    }
+
+    updateSelected(item: string) {
+        if (this.props.onSelectItem != null) {
+            this.props.onSelectItem(item)
+        }
     }
 }

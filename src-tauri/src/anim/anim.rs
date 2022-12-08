@@ -13,13 +13,17 @@ pub struct AnimInfo {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Animation {
+    #[serde(rename="currentFrameIndex")]
     pub current_frame_index: u32,
+    #[serde(rename="currentTime")]
     pub current_time: f32,
     pub duration: f32,
     pub fps: f32,
     pub frames: Vec<String>,
+    #[serde(rename="loopStart")]
     pub loop_start: u32,
     pub name: String,
+    #[serde(rename="numFrames")]
     pub num_frames: u32,
 }
 
