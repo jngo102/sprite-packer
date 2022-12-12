@@ -1,11 +1,11 @@
 [package]
-name = "sprite-packer"
+name = "sprite_packer"
 version = "0.1.0"
 description = "A Tauri App"
 authors = ["jngo102"]
 license = "MIT"
-repository = "https://github.com/jngo102/sprite-packer"
-default-run = "sprite-packer"
+repository = "https://github.com/jngo102/sprite_packer"
+default-run = "sprite_packer"
 edition = "2021"
 rust-version = "1.59"
 

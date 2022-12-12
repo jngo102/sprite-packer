@@ -52,6 +52,10 @@ export default class App extends Component<{}, AppState> {
   async componentDidMount() {
     await appWindow.listen("progress", ({ event, payload }) => {
       this.setState({ packProgress: (payload as ProgressPayload).progress })
+      if (this.state.packProgress >= 100) {
+        var packButton = document.getElementById("pack-button") as HTMLButtonElement
+        packButton.disabled = false
+      }
     });
 
     await invoke('get_sprites_path').then(path => this.spritesPath = path as string)
@@ -138,9 +142,6 @@ export default class App extends Component<{}, AppState> {
     this.setState({ packProgress: 0 })
 
     invoke('pack_library', { libraryName: this.state.currentLibrary?.name as string, window: appWindow })
-      .then(() => {
-        packButton.disabled = false
-      })
   }
 
   setCurrentClip(clipName: string) {

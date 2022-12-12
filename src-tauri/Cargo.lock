@@ -2440,7 +2440,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "sprite-packer"
+name = "sprite_packer"
 version = "0.1.0"
 dependencies = [
  "directories",

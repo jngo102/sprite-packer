@@ -5,6 +5,7 @@
 
 mod app;
 mod tk2d;
+mod macros;
 
 use crate::app::app::App;
 use crate::app::settings::Settings;
@@ -14,7 +15,7 @@ use crate::tk2d::info::{AnimInfo, SpriteInfo};
 use crate::tk2d::lib::*;
 use directories::BaseDirs;
 use image::{DynamicImage, GenericImage, GenericImageView};
-use log::{error, info, warn, LevelFilter};
+use log::{error, info, LevelFilter};
 use native_dialog::FileDialog;
 use rayon::prelude::*;
 use serde::Serialize;
@@ -164,7 +165,7 @@ fn load_collections_and_libraries(app_state: &AppState) {
                             Ok(text) => {
                                 let sprite_info: SpriteInfo = match serde_json::from_str(&text) {
                                     Ok(info) => info,
-                                    Err(e) => panic!("Failed to parse SpriteInfo.json: {}", e),
+                                    Err(e) => log_panic!("Failed to parse SpriteInfo.json: {}", e),
                                 };
 
                                 for i in 0..sprite_info.id.len() {
@@ -190,7 +191,7 @@ fn load_collections_and_libraries(app_state: &AppState) {
                                                 }
                                             }
                                         },
-                                        None => panic!("Failed to get sprite at index {}.", i),
+                                        None => log_panic!("Failed to get sprite at index {}.", i),
                                     }
                                 }
 
@@ -206,7 +207,7 @@ fn load_collections_and_libraries(app_state: &AppState) {
                                                                 return;
                                                             }
                                                         },
-                                                        None => panic!("Failed to get file name of clip path {:?}", clip_path.path().display()),
+                                                        None => log_panic!("Failed to get file name of clip path {:?}", clip_path.path().display()),
                                                     }
                                                     let frames = Mutex::new(Vec::new());
                                                     let fps = Mutex::new(12.0);
@@ -221,18 +222,18 @@ fn load_collections_and_libraries(app_state: &AppState) {
                                                                                 Ok(text) => {
                                                                                     let lib_info: AnimInfo = match serde_json::from_str(&text) {
                                                                                         Ok(lib_info) => lib_info,
-                                                                                        Err(e) => panic!("Failed to parse AnimInfo.json: {}", e),
+                                                                                        Err(e) => log_panic!("Failed to parse AnimInfo.json: {}", e),
                                                                                     };
                                                                                     match fps.lock() {
                                                                                         Ok(mut fps) => *fps = lib_info.fps,
-                                                                                        Err(e) => panic!("Failed to lock fps: {}", e),
+                                                                                        Err(e) => log_panic!("Failed to lock fps: {}", e),
                                                                                     }
                                                                                     match loop_start.lock() {
                                                                                         Ok(mut loop_start) => *loop_start = lib_info.loop_start,
-                                                                                        Err(e) => panic!("Failed to lock loop_start: {}", e),
+                                                                                        Err(e) => log_panic!("Failed to lock loop_start: {}", e),
                                                                                     }
                                                                                 },
-                                                                                Err(e) => panic!("Failed to read AnimInfo.json: {}", e),
+                                                                                Err(e) => log_panic!("Failed to read AnimInfo.json: {}", e),
                                                                             }
                                                                             return;
                                                                         }
@@ -241,22 +242,22 @@ fn load_collections_and_libraries(app_state: &AppState) {
                                                                             Some(index) => {
                                                                                 match sprite_info.at(index) {
                                                                                     Some(sprite) => sprite,
-                                                                                    None => panic!("Failed to get sprite at index {}", index),
+                                                                                    None => log_panic!("Failed to get sprite at index {}", index),
                                                                                 }
                                                                             },
-                                                                            None => panic!("Failed to find sprite with path {:?}", frame_path.path().display()),
+                                                                            None => log_panic!("Failed to find sprite with path {:?}", frame_path.path().display()),
                                                                         };
 
                                                                         match frames.lock() {
                                                                             Ok(mut frames) => frames.push(sprite),
-                                                                            Err(e) => panic!("Failed to lock frames: {}", e),
+                                                                            Err(e) => log_panic!("Failed to lock frames: {}", e),
                                                                         }
                                                                     },
-                                                                    Err(e) => panic!("Failed to get frame path: {}", e),
+                                                                    Err(e) => log_panic!("Failed to get frame path: {}", e),
                                                                 }
                                                             });
                                                         }
-                                                        Err(e) => panic!(
+                                                        Err(e) => log_panic!(
                                                             "Failed to read directory {:?}: {}",
                                                             lib_path, e
                                                         ),
@@ -266,15 +267,15 @@ fn load_collections_and_libraries(app_state: &AppState) {
                                                         Some(clip_name) => {
                                                             let frames = match frames.lock() {
                                                                 Ok(frames) => frames.clone(),
-                                                                Err(e) => panic!("Failed to lock frames: {}", e),
+                                                                Err(e) => log_panic!("Failed to lock frames: {}", e),
                                                             };
                                                             let fps = match fps.lock() {
                                                                 Ok(fps) => *fps,
-                                                                Err(e) => panic!("Failed to lock fps: {}", e),
+                                                                Err(e) => log_panic!("Failed to lock fps: {}", e),
                                                             };
                                                             let loop_start = match loop_start.lock() {
                                                                 Ok(loop_start) => *loop_start,
-                                                                Err(e) => panic!("Failed to lock loop_start: {}", e),
+                                                                Err(e) => log_panic!("Failed to lock loop_start: {}", e),
                                                             };
                                                             match clips.lock() {
                                                                 Ok(mut clips) => clips.push(Clip::new(
@@ -283,13 +284,13 @@ fn load_collections_and_libraries(app_state: &AppState) {
                                                                     fps,
                                                                     loop_start,
                                                                 )),
-                                                                Err(e) => panic!("Failed to lock clips: {}", e),
+                                                                Err(e) => log_panic!("Failed to lock clips: {}", e),
                                                             }
                                                         }
-                                                        None => panic!("Failed to get clip name."),
+                                                        None => log_panic!("Failed to get clip name."),
                                                     }
                                                 }
-                                                Err(e) => panic!(
+                                                Err(e) => log_panic!(
                                                     "Failed to get entry from {:?}: {}",
                                                     lib_path, e
                                                 ),
@@ -297,19 +298,19 @@ fn load_collections_and_libraries(app_state: &AppState) {
                                         });
                                     }
                                     Err(e) => {
-                                        panic!("Failed to read directory {:?}: {}", lib_path, e)
+                                        log_panic!("Failed to read directory {:?}: {}", lib_path, e)
                                     }
                                 }
 
                                 let lib_file = lib_path.file_name();
                                 let library_name = match lib_file.to_str() {
                                     Some(name) => name,
-                                    None => panic!("Failed to get library name."),
+                                    None => log_panic!("Failed to get library name."),
                                 };
 
                                 let mut clips = match clips.lock() {
                                     Ok(clips) => clips.clone(),
-                                    Err(e) => panic!("Failed to lock clips: {}", e),
+                                    Err(e) => log_panic!("Failed to lock clips: {}", e),
                                 };
 
                                 clips.par_sort();
@@ -319,14 +320,14 @@ fn load_collections_and_libraries(app_state: &AppState) {
                                     clips,
                                 });
                             }
-                            Err(e) => panic!("Failed to read SpriteInfo.json: {}", e),
+                            Err(e) => log_panic!("Failed to read SpriteInfo.json: {}", e),
                         }
                     }
-                    Err(e) => panic!("Error while iterating path: {}", e),
+                    Err(e) => log_panic!("Error while iterating path: {}", e),
                 }
             }
         }
-        Err(e) => panic!("Failed to read directory: {}", e),
+        Err(e) => log_panic!("Failed to read directory: {}", e),
     }
 
     (*state).loaded_collections.par_sort();
@@ -346,7 +347,7 @@ async fn pack_collection(
         Some(cln) => {
             let atlas = match image::open(cln.path.clone()) {
                 Ok(atlas) => atlas,
-                Err(e) => panic!("Failed to open atlas file: {}", e),
+                Err(e) => log_panic!("Failed to open atlas file: {}", e),
             };
             let sprite_num = Mutex::new(0);
             let atlas_width = atlas.width();
@@ -355,11 +356,11 @@ async fn pack_collection(
             for sprite in cln.sprites.iter() {
                 let frame_path = match PathBuf::from_str(sprites_path.as_str()) {
                     Ok(path) => path.join(sprite.path.clone()),
-                    Err(e) => panic!("Failed to create frame path from string: {}", e),
+                    Err(e) => log_panic!("Failed to create frame path from string: {}", e),
                 };
-                let frame_image = match image::open(frame_path) {
+                let frame_image = match image::open(frame_path.clone()) {
                     Ok(image) => image,
-                    Err(e) => panic!("Failed to open frame image: {}", e),
+                    Err(e) => log_panic!("Failed to open frame image at {:?}: {}", frame_path.display(), e),
                 };
 
                 (0..frame_image.width() as i32).into_par_iter().for_each(|i| {
@@ -386,7 +387,7 @@ async fn pack_collection(
                                         frame_image.get_pixel(i as u32, frame_image.height() - j as u32 - 1),
                                     );
                                 },
-                                Err(e) => panic!("Failed to lock generated atlas: {}", e),
+                                Err(e) => log_panic!("Failed to lock generated atlas: {}", e),
                             }
                         }
                     });
@@ -397,29 +398,29 @@ async fn pack_collection(
                         *num += 1;
                         match window.emit("progress", ProgressPayload { progress: *num * 100 / cln.sprites.len() }) {
                             Ok(_) => info!("Emitted pack progress: {}%", *num * 100 / cln.sprites.len()),
-                            Err(e) => panic!("Failed to emit progress: {}", e),
+                            Err(e) => log_panic!("Failed to emit progress: {}", e),
                         }
                     },
-                    Err(e) => panic!("Failed to lock sprite num: {}", e),
+                    Err(e) => log_panic!("Failed to lock sprite num: {}", e),
                 }
             }
 
             let atlas_path = match PathBuf::from_str(sprites_path.as_str()) {
                 Ok(path) => path.join(library_name).join("0.Atlases").join(format!("Gen-{}.png", collection_name)),
-                Err(e) => panic!("Failed to create atlas path: {}", e),
+                Err(e) => log_panic!("Failed to create atlas path: {}", e),
             };  
 
             match gen_atlas.lock() {
                 Ok(atlas) => {
                     match atlas.save(atlas_path.clone()) {
                         Ok(_) => info!("Generated atlas saved to {:?}", atlas_path.display()),
-                        Err(e) => panic!("Failed to save atlas: {}", e),
+                        Err(e) => log_panic!("Failed to save atlas: {}", e),
                     }
                 },
-                Err(e) => panic!("Failed to lock generated atlas: {}", e),
+                Err(e) => log_panic!("Failed to lock generated atlas: {}", e),
             };
         },
-        None => panic!("Failed to find collection {}.", collection_name),
+        None => log_panic!("Failed to find collection {}.", collection_name),
     }
 }
 
@@ -462,7 +463,7 @@ fn get_library(library_name: String, state: State<AppState>) -> Library {
         .find_first(|lib| lib.name == library_name)
     {
         Some(library) => library.clone(),
-        None => panic!("Failed to find library with name: {}", library_name),
+        None => log_panic!("Failed to find library with name: {}", library_name),
     }
 }
 
@@ -473,13 +474,13 @@ fn get_library_list(state: State<AppState>) -> Vec<String> {
     let _ = &app_state.loaded_libraries.par_iter().for_each(|library| {
         match library_list.lock() {
             Ok(mut list) => list.push(library.name.clone()),
-            Err(e) => panic!("Failed to lock library list: {}", e),
+            Err(e) => log_panic!("Failed to lock library list: {}", e),
         }
     });
     
     return match library_list.lock() {
         Ok(list) => list.to_vec(),
-        Err(e) => panic!("Failed to lock library list: {}", e),
+        Err(e) => log_panic!("Failed to lock library list: {}", e),
     };
 }
 

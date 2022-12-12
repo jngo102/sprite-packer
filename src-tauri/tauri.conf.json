@@ -7,7 +7,7 @@
     "distDir": "../dist"
   },
   "package": {
-    "productName": "sprite-packer",
+    "productName": "sprite_packer",
     "version": "0.1.0"
   },
   "tauri": {
@@ -34,7 +34,7 @@
         "icons/icon.icns",
         "icons/icon.ico"
       ],
-      "identifier": "com.ngo-projects.sprite-packer",
+      "identifier": "com.ngo-projects.sprite_packer",
       "longDescription": "",
       "macOS": {
         "entitlements": null,

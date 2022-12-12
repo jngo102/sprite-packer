@@ -8,7 +8,7 @@ body:
       attributes:
           value: |
               ## Before you open an issue:
-              1. Please search for [existing issues](https://github.com/jngo102/sprite-packer/issues?q=is%3Aissue) about this problem first.
+              1. Please search for [existing issues](https://github.com/jngo102/sprite_packer/issues?q=is%3Aissue) about this problem first.
               2. Make sure your installer is up-to-date.
 
     - type: textarea

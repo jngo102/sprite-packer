@@ -28,7 +28,7 @@ jobs:
                   release_name: "SpritePacker v${{ env.PACKAGE_VERSION }}"
                   body: "SpritePacker has released another version.\n\nChangelog:\n-"
                   draft: false
-                  prerelease: true
+                  prerelease: false
     build-tauri:
         needs: create-release
         strategy:
