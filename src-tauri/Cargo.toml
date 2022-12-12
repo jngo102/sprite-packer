@@ -16,7 +16,7 @@ tauri-build = { version = "^1", features = [] }
 
 [dependencies]
 directories = "^4"
-eventual = "^0.1"
+image = "^0.24"
 log = "^0.4"
 native-dialog = "^0.6"
 rayon = "^1"

@@ -1,24 +1,14 @@
-export class Collection {
-    name: string
-    animations: Animation[]
-
-    constructor(name: string, animations: Animation[]) {
-        this.name = name
-        this.animations = animations
-    }
-}
-
-export class Animation {
+export class Clip {
     currentFrameIndex: number
     currentTime: number
     duration: number
     fps: number
-    frames: string[]
+    frames: Sprite[]
     loopStart: number
     name: string
     numFrames: number
 
-    constructor(frames: string[], fps: number, loopStart: number, name: string) {
+    constructor(frames: Sprite[], fps: number, loopStart: number, name: string) {
         this.currentFrameIndex = 0
         this.currentTime = 0
         this.duration = frames.length * (1.0 / fps)
@@ -27,5 +17,63 @@ export class Animation {
         this.loopStart = loopStart
         this.name = name
         this.numFrames = frames.length
+    }
+}
+
+export class Library {
+    name: string
+    clips: Clip[]
+
+    constructor(name: string, clips: Clip[]) {
+        this.name = name
+        this.clips = clips
+    }
+}
+
+export class Sprite {
+    id: number
+    x: number
+    y: number
+    xr: number
+    yr: number
+    width: number
+    height: number
+    collectionName: string
+    name: string
+    path: string
+    flipped: boolean
+
+    constructor(
+        id: number,
+        x: number,
+        y: number,
+        xr: number,
+        yr: number,
+        width: number,
+        height: number,
+        collectionName: string,
+        name: string,
+        path: string,
+        flipped: boolean
+    ) {
+        this.id = id;
+        this.x = x;
+        this.y = y;
+        this.xr = xr;
+        this.yr = yr;
+        this.width = width;
+        this.height = height;
+        this.collectionName = collectionName
+        this.name = name;
+        this.path = path;
+        this.flipped = flipped;
+    }
+}
+
+export class ProgressPayload {
+    progress: number;
+
+    constructor(progress: number) {
+        this.progress = progress
     }
 }

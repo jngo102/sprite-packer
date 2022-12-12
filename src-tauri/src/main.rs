@@ -3,28 +3,36 @@
     windows_subsystem = "windows"
 )]
 
-mod anim;
 mod app;
+mod tk2d;
 
-use crate::anim::anim::{AnimInfo, Animation};
-use crate::anim::cln::Collection;
-use crate::anim::sprite::Sprite;
 use crate::app::app::App;
 use crate::app::settings::Settings;
+use crate::tk2d::clip::Clip;
+use crate::tk2d::cln::Collection;
+use crate::tk2d::info::{AnimInfo, SpriteInfo};
+use crate::tk2d::lib::*;
 use directories::BaseDirs;
-use eventual::Timer;
+use image::{DynamicImage, GenericImage, GenericImageView};
 use log::{error, info, warn, LevelFilter};
-use native_dialog::{FileDialog, MessageDialog, MessageType};
+use native_dialog::FileDialog;
+use rayon::prelude::*;
+use serde::Serialize;
 use simple_logging;
+use std::cmp;
 use std::env;
 use std::fs;
-use std::fs::{File, ReadDir};
-use std::io::{Cursor, Read, Write};
-use std::path::{Path, PathBuf};
+use std::fs::File;
+use std::io::Write;
+use std::path::PathBuf;
 use std::str::FromStr;
-use std::sync::{mpsc, Mutex, MutexGuard};
-use std::thread;
-use tauri::{async_runtime, command, Manager, State};
+use std::sync::Mutex;
+use tauri::{async_runtime, command, Manager, State, Window};
+
+#[derive(Clone, Serialize)]
+struct ProgressPayload {
+    progress: usize,
+}
 
 struct AppState(Mutex<App>);
 
@@ -82,16 +90,18 @@ fn setup_app() {
     let app_state = AppState(Default::default());
     let settings_exist = check_settings(&app_state);
     if !settings_exist {
-        let state = app_state.0.lock().unwrap();
-        select_sprites_path(state);
+        select_sprites_path(&app_state);
     }
+    load_collections_and_libraries(&app_state);
     let app = tauri::Builder::default()
         .manage(app_state)
         .invoke_handler(tauri::generate_handler![
             debug,
-            get_collection,
-            get_collection_list,
+            get_library,
+            get_library_list,
+            get_pack_progress,
             get_sprites_path,
+            pack_library,
         ])
         .build(tauri::generate_context!())
         .expect("Failed to build tauri application.");
@@ -141,7 +151,279 @@ fn setup_app() {
     });
 }
 
-fn select_sprites_path(mut app: MutexGuard<App>) {
+fn load_collections_and_libraries(app_state: &AppState) {
+    let mut state = app_state.0.lock().unwrap();
+    match fs::read_dir(state.settings.sprites_path.clone()) {
+        Ok(lib_paths) => {
+            for lib_path in lib_paths {
+                match lib_path {
+                    Ok(lib_path) => {
+                        let sprite_info_path =
+                            lib_path.path().join("0.Atlases").join("SpriteInfo.json");
+                        match fs::read_to_string(sprite_info_path) {
+                            Ok(text) => {
+                                let sprite_info: SpriteInfo = match serde_json::from_str(&text) {
+                                    Ok(info) => info,
+                                    Err(e) => panic!("Failed to parse SpriteInfo.json: {}", e),
+                                };
+
+                                for i in 0..sprite_info.id.len() {
+                                    match sprite_info.at(i) {
+                                        Some(sprite) => {
+                                            match state.loaded_collections.par_iter().find_first(|cln| cln.name == sprite.collection_name) {
+                                                Some(cln) => {
+                                                    let mut cln = cln.clone();
+                                                    let sprite = sprite.clone();
+                                                    cln.sprites.push(sprite.clone());
+                                                    (*state).loaded_collections.retain(|cln| cln.name != sprite.collection_name);
+                                                    (*state).loaded_collections.push(cln);
+                                                },
+                                                None => {
+                                                    let collection_name = sprite.clone().collection_name;
+                                                    let mut cln = Collection {
+                                                        name: collection_name.clone(),
+                                                        path: lib_path.path().join("0.Atlases").join(format!("{}.png", collection_name)),
+                                                        sprites: Vec::new(),
+                                                    };
+                                                    cln.sprites.push(sprite);
+                                                    (*state).loaded_collections.push(cln);
+                                                }
+                                            }
+                                        },
+                                        None => panic!("Failed to get sprite at index {}.", i),
+                                    }
+                                }
+
+                                let clips = Mutex::new(Vec::new());
+                                match fs::read_dir(lib_path.path()) {
+                                    Ok(clip_paths) => {
+                                        clip_paths.into_iter().par_bridge().for_each(|clip_path| {
+                                            match clip_path {
+                                                Ok(clip_path) => {
+                                                    match clip_path.path().file_name() {
+                                                        Some(file_name) => {
+                                                            if file_name == "0.Atlases" {
+                                                                return;
+                                                            }
+                                                        },
+                                                        None => panic!("Failed to get file name of clip path {:?}", clip_path.path().display()),
+                                                    }
+                                                    let frames = Mutex::new(Vec::new());
+                                                    let fps = Mutex::new(12.0);
+                                                    let loop_start = Mutex::new(0);
+                                                    match fs::read_dir(clip_path.path()) {
+                                                        Ok(frame_paths) => {
+                                                            frame_paths.into_iter().par_bridge().for_each(|frame_path| {
+                                                                match frame_path {
+                                                                    Ok(frame_path) => {
+                                                                        if frame_path.file_name() == "AnimInfo.json" {
+                                                                            match fs::read_to_string(frame_path.path()) {
+                                                                                Ok(text) => {
+                                                                                    let lib_info: AnimInfo = match serde_json::from_str(&text) {
+                                                                                        Ok(lib_info) => lib_info,
+                                                                                        Err(e) => panic!("Failed to parse AnimInfo.json: {}", e),
+                                                                                    };
+                                                                                    match fps.lock() {
+                                                                                        Ok(mut fps) => *fps = lib_info.fps,
+                                                                                        Err(e) => panic!("Failed to lock fps: {}", e),
+                                                                                    }
+                                                                                    match loop_start.lock() {
+                                                                                        Ok(mut loop_start) => *loop_start = lib_info.loop_start,
+                                                                                        Err(e) => panic!("Failed to lock loop_start: {}", e),
+                                                                                    }
+                                                                                },
+                                                                                Err(e) => panic!("Failed to read AnimInfo.json: {}", e),
+                                                                            }
+                                                                            return;
+                                                                        }
+                                                                        
+                                                                        let sprite = match sprite_info.path.par_iter().position_first(|path| frame_path.path().ends_with(path)) {
+                                                                            Some(index) => {
+                                                                                match sprite_info.at(index) {
+                                                                                    Some(sprite) => sprite,
+                                                                                    None => panic!("Failed to get sprite at index {}", index),
+                                                                                }
+                                                                            },
+                                                                            None => panic!("Failed to find sprite with path {:?}", frame_path.path().display()),
+                                                                        };
+
+                                                                        match frames.lock() {
+                                                                            Ok(mut frames) => frames.push(sprite),
+                                                                            Err(e) => panic!("Failed to lock frames: {}", e),
+                                                                        }
+                                                                    },
+                                                                    Err(e) => panic!("Failed to get frame path: {}", e),
+                                                                }
+                                                            });
+                                                        }
+                                                        Err(e) => panic!(
+                                                            "Failed to read directory {:?}: {}",
+                                                            lib_path, e
+                                                        ),
+                                                    }
+
+                                                    match clip_path.file_name().to_str() {
+                                                        Some(clip_name) => {
+                                                            let frames = match frames.lock() {
+                                                                Ok(frames) => frames.clone(),
+                                                                Err(e) => panic!("Failed to lock frames: {}", e),
+                                                            };
+                                                            let fps = match fps.lock() {
+                                                                Ok(fps) => *fps,
+                                                                Err(e) => panic!("Failed to lock fps: {}", e),
+                                                            };
+                                                            let loop_start = match loop_start.lock() {
+                                                                Ok(loop_start) => *loop_start,
+                                                                Err(e) => panic!("Failed to lock loop_start: {}", e),
+                                                            };
+                                                            match clips.lock() {
+                                                                Ok(mut clips) => clips.push(Clip::new(
+                                                                    clip_name.to_string(),
+                                                                    frames,
+                                                                    fps,
+                                                                    loop_start,
+                                                                )),
+                                                                Err(e) => panic!("Failed to lock clips: {}", e),
+                                                            }
+                                                        }
+                                                        None => panic!("Failed to get clip name."),
+                                                    }
+                                                }
+                                                Err(e) => panic!(
+                                                    "Failed to get entry from {:?}: {}",
+                                                    lib_path, e
+                                                ),
+                                            }
+                                        });
+                                    }
+                                    Err(e) => {
+                                        panic!("Failed to read directory {:?}: {}", lib_path, e)
+                                    }
+                                }
+
+                                let lib_file = lib_path.file_name();
+                                let library_name = match lib_file.to_str() {
+                                    Some(name) => name,
+                                    None => panic!("Failed to get library name."),
+                                };
+
+                                let mut clips = match clips.lock() {
+                                    Ok(clips) => clips.clone(),
+                                    Err(e) => panic!("Failed to lock clips: {}", e),
+                                };
+
+                                clips.par_sort();
+
+                                (*state).loaded_libraries.push(Library {
+                                    name: library_name.to_string(),
+                                    clips,
+                                });
+                            }
+                            Err(e) => panic!("Failed to read SpriteInfo.json: {}", e),
+                        }
+                    }
+                    Err(e) => panic!("Error while iterating path: {}", e),
+                }
+            }
+        }
+        Err(e) => panic!("Failed to read directory: {}", e),
+    }
+
+    (*state).loaded_collections.par_sort();
+    (*state).loaded_libraries.par_sort();
+}
+
+async fn pack_collection(
+    window: Window,
+    library_name: String, 
+    collection_name: String, 
+    sprites_path: String, 
+    loaded_collections: Vec<Collection>) {
+    match loaded_collections
+        .par_iter()
+        .find_first(|cln| cln.name == collection_name)
+    {
+        Some(cln) => {
+            let atlas = match image::open(cln.path.clone()) {
+                Ok(atlas) => atlas,
+                Err(e) => panic!("Failed to open atlas file: {}", e),
+            };
+            let sprite_num = Mutex::new(0);
+            let atlas_width = atlas.width();
+            let atlas_height = atlas.height();
+            let gen_atlas = Mutex::new(DynamicImage::new_rgba8(atlas_width, atlas_height));
+            for sprite in cln.sprites.iter() {
+                let frame_path = match PathBuf::from_str(sprites_path.as_str()) {
+                    Ok(path) => path.join(sprite.path.clone()),
+                    Err(e) => panic!("Failed to create frame path from string: {}", e),
+                };
+                let frame_image = match image::open(frame_path) {
+                    Ok(image) => image,
+                    Err(e) => panic!("Failed to open frame image: {}", e),
+                };
+
+                (0..frame_image.width() as i32).into_par_iter().for_each(|i| {
+                    (0..frame_image.height() as i32).into_par_iter().for_each(|j| {
+                        let x = if sprite.flipped {
+                            sprite.x + j - sprite.yr
+                        } else {
+                            sprite.x + i - sprite.xr
+                        };
+                        let y = if sprite.flipped {
+                            atlas_width as i32 - (sprite.y + i) - 1 + sprite.xr
+                        } else {
+                            atlas_height as i32 - (sprite.y + j) - 1 + sprite.yr
+                        };
+                        if i >= sprite.xr && i < sprite.xr + sprite.width
+                            && j >= sprite.yr && j < sprite.yr + sprite.height
+                            && x >= 0 && x < atlas_width as i32 && y < atlas_height as i32
+                        {
+                            match gen_atlas.lock() {
+                                Ok(mut atlas) => {
+                                    atlas.put_pixel(
+                                        x as u32,
+                                        cmp::max(y, 0i32) as u32,
+                                        frame_image.get_pixel(i as u32, frame_image.height() - j as u32 - 1),
+                                    );
+                                },
+                                Err(e) => panic!("Failed to lock generated atlas: {}", e),
+                            }
+                        }
+                    });
+                });
+
+                match sprite_num.lock() {
+                    Ok(mut num) => {
+                        *num += 1;
+                        match window.emit("progress", ProgressPayload { progress: *num * 100 / cln.sprites.len() }) {
+                            Ok(_) => info!("Emitted pack progress: {}%", *num * 100 / cln.sprites.len()),
+                            Err(e) => panic!("Failed to emit progress: {}", e),
+                        }
+                    },
+                    Err(e) => panic!("Failed to lock sprite num: {}", e),
+                }
+            }
+
+            let atlas_path = match PathBuf::from_str(sprites_path.as_str()) {
+                Ok(path) => path.join(library_name).join("0.Atlases").join(format!("Gen-{}.png", collection_name)),
+                Err(e) => panic!("Failed to create atlas path: {}", e),
+            };  
+
+            match gen_atlas.lock() {
+                Ok(atlas) => {
+                    match atlas.save(atlas_path.clone()) {
+                        Ok(_) => info!("Generated atlas saved to {:?}", atlas_path.display()),
+                        Err(e) => panic!("Failed to save atlas: {}", e),
+                    }
+                },
+                Err(e) => panic!("Failed to lock generated atlas: {}", e),
+            };
+        },
+        None => panic!("Failed to find collection {}.", collection_name),
+    }
+}
+
+fn select_sprites_path(app_state: &AppState) {
     let selected_path = FileDialog::new()
         .set_location("~")
         .show_open_single_dir()
@@ -154,7 +436,8 @@ fn select_sprites_path(mut app: MutexGuard<App>) {
         }
     };
 
-    (*app).settings.sprites_path = match selected_path.into_os_string().into_string() {
+    let mut state = app_state.0.lock().unwrap();
+    state.settings.sprites_path = match selected_path.into_os_string().into_string() {
         Ok(path) => path,
         Err(e) => {
             error!("Failed to convert path to string: {:?}", e);
@@ -162,7 +445,7 @@ fn select_sprites_path(mut app: MutexGuard<App>) {
         }
     };
 
-    info!("Selected sprites path as: {}", app.settings.sprites_path);
+    info!("Selected sprites path as: {}", state.settings.sprites_path);
 }
 
 #[command]
@@ -171,126 +454,76 @@ fn debug(msg: String) {
 }
 
 #[command]
-fn get_collection(collection_name: String, state: State<AppState>) -> Collection {
+fn get_library(library_name: String, state: State<AppState>) -> Library {
     let app_state = state.0.lock().unwrap();
-    match fs::read_dir(app_state.settings.sprites_path.clone()) {
-        Ok(collection_paths) => {
-            for collection_path in collection_paths {
-                match collection_path {
-                    Ok(collection_path) => {
-                        let folder_name = match collection_path.file_name().into_string() {
-                            Ok(folder_name) => folder_name,
-                            Err(e) => panic!("Failed to convert path to string: {:?}", e),
-                        };
-                        if folder_name == collection_name {
-                            let mut animations = Vec::new();
-                            match fs::read_dir(collection_path.path()) {
-                                Ok(anim_paths) => {
-                                    for anim_path in anim_paths {
-                                        match anim_path {
-                                            Ok(anim_path) => {
-                                                if anim_path.file_name() == "0.Atlases" {
-                                                    continue;
-                                                }
-                                                let mut frames = Vec::new();
-                                                let mut fps = 0.0;
-                                                let mut loop_start = 0;
-                                                match fs::read_dir(anim_path.path()) {
-                                                    Ok(frame_paths) => {
-                                                        for frame_path in frame_paths {
-                                                            match frame_path {
-                                                        Ok(frame_path) => {
-                                                            if frame_path.file_name() == "AnimInfo.json" {
-                                                                match fs::read_to_string(frame_path.path()) {
-                                                                    Ok(text) => {
-                                                                        let anim_info: AnimInfo = match serde_json::from_str(&text) {
-                                                                            Ok(anim_info) => anim_info,
-                                                                            Err(e) => panic!("Failed to parse AnimInfo.json: {}", e),
-                                                                        };
-                                                                        fps = anim_info.fps;
-                                                                        loop_start = anim_info.loop_start;
-                                                                    },
-                                                                    Err(e) => panic!("Failed to read AnimInfo.json: {}", e),
-                                                                }
-                                                                continue;
-                                                            }
-                                                            match frame_path.file_name().into_string() {
-                                                                Ok(frame_name) => frames.push(frame_name),
-                                                                Err(e) => panic!("Failed to get frame name from file name: {:?}", e),
-                                                            }
-                                                        },
-                                                        Err(e) => panic!("Failed to read get frame path: {}", e),
-                                                    }
-                                                        }
-                                                    }
-                                                    Err(e) => panic!(
-                                                        "Failed to read directory {:?}: {}",
-                                                        anim_path, e
-                                                    ),
-                                                }
-                                                let anim_name = match anim_path.file_name().into_string() {
-                                                    Ok(anim_name) => anim_name,
-                                                    Err(e) => panic!("Failed to get animation name from file name: {:?}", e),
-                                                };
-                                                animations.push(Animation::new(
-                                                    anim_name, frames, fps, loop_start,
-                                                ));
-                                            }
-                                            Err(e) => panic!(
-                                                "Failed to read directory {:?}: {}",
-                                                folder_name, e
-                                            ),
-                                        }
-                                    }
-                                }
-                                Err(e) => {
-                                    panic!("Failed to read directory {:?}: {}", folder_name, e)
-                                }
-                            };
-                            return Collection {
-                                name: collection_name,
-                                animations,
-                            };
-                        }
-                    }
-                    Err(e) => panic!("Error while iterating path: {}", e),
-                }
-            }
-        }
-        Err(e) => panic!("Failed to read directory: {}", e),
+    match app_state
+        .loaded_libraries
+        .par_iter()
+        .find_first(|lib| lib.name == library_name)
+    {
+        Some(library) => library.clone(),
+        None => panic!("Failed to find library with name: {}", library_name),
     }
-
-    panic!("Failed to find collection {:?}", collection_name);
 }
 
 #[command]
-fn get_collection_list(state: State<AppState>) -> Vec<String> {
+fn get_library_list(state: State<AppState>) -> Vec<String> {
     let app_state = state.0.lock().unwrap();
-    let mut collections = Vec::new();
-    match fs::read_dir(app_state.settings.sprites_path.clone()) {
-        Ok(collection_paths) => {
-            for collection_path in collection_paths {
-                match collection_path {
-                    Ok(collection_path) => {
-                        match collection_path.file_name().into_string() {
-                            Ok(collection_name) => {
-                                collections.push(collection_name);
-                            },
-                            Err(e) => panic!("Failed to convert path to string: {:?}", e),
-                        }
-                    },
-                    Err(e) => panic!("Failed to get collection path: {}", e),
-                }
-            }
-        },
-        Err(e) => panic!("Failed to read directory: {}", e),
-    }
+    let library_list = Mutex::new(Vec::new());
+    let _ = &app_state.loaded_libraries.par_iter().for_each(|library| {
+        match library_list.lock() {
+            Ok(mut list) => list.push(library.name.clone()),
+            Err(e) => panic!("Failed to lock library list: {}", e),
+        }
+    });
+    
+    return match library_list.lock() {
+        Ok(list) => list.to_vec(),
+        Err(e) => panic!("Failed to lock library list: {}", e),
+    };
+}
 
-    collections
+#[command]
+fn get_pack_progress(state: State<AppState>) -> usize {
+    let app_state = state.0.lock().unwrap();
+    info!("Current pack progress: {}", app_state.current_pack_progress);
+    app_state.current_pack_progress
 }
 
 #[command]
 fn get_sprites_path(state: State<AppState>) -> String {
     let app_state = state.0.lock().unwrap();
     app_state.settings.sprites_path.clone()
+}
+
+#[command]
+fn pack_library(library_name: String, window: Window, state: State<AppState>) {
+    let library = get_library(library_name.clone(), state.clone());
+    let mut collection_names = library
+        .clips
+        .par_iter()
+        .map(|clip| {
+            clip.frames
+                .par_iter()
+                .map(|frame| frame.collection_name.clone())
+        })
+        .flatten() 
+        .collect::<Vec<String>>();
+    collection_names.par_sort();
+    collection_names.dedup();
+
+    let mut app_state = state.0.lock().unwrap();
+    app_state.current_pack_progress = 0;
+
+    for collection_name in collection_names {
+        async_runtime::spawn(
+            pack_collection(
+                window.clone(),
+                library_name.clone(), 
+                collection_name.to_string(), 
+                app_state.settings.sprites_path.clone(),
+                app_state.loaded_collections.clone()
+            )
+        );
+    }
 }
