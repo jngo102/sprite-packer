@@ -34,7 +34,7 @@
         "icons/icon.icns",
         "icons/icon.ico"
       ],
-      "identifier": "com.ngo-projects.sprite_packer",
+      "identifier": "com.ngo-projects.sprite-packer",
       "longDescription": "",
       "macOS": {
         "entitlements": null,
