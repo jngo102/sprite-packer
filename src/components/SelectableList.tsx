@@ -22,7 +22,7 @@ export default class SelectableList extends Component<SelectableListProps, Selec
 
     render() {
         return (
-            <Grid item xs={4}>
+            <Grid item xs={2}>
                 <List dense
                     disablePadding
                     sx={{
@@ -34,10 +34,10 @@ export default class SelectableList extends Component<SelectableListProps, Selec
                         <Divider />
                     </ListSubheader>
                     {this.props.items?.map(item => (
-                        <ListItem disablePadding>
-                            <ListItemButton key={item}
+                        <ListItem disablePadding key={item}>
+                            <ListItemButton
                                 onClick={_ => this.updateSelected(item)}
-                                selected={this.props.selectedItem == item} >
+                                selected={this.props.selectedItem == item}>
                                 <ListItemText primary={item} />
                             </ListItemButton>
                         </ListItem>

@@ -7,7 +7,7 @@
     "distDir": "../dist"
   },
   "package": {
-    "productName": "sprite_packer",
+    "productName": "sprite-packer",
     "version": "0.1.0"
   },
   "tauri": {

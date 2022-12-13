@@ -20,7 +20,24 @@ export class Clip {
     }
 }
 
-export class Library {
+export class Collection {
+    name: string
+    path: string
+    sprites: Sprite[]
+
+    constructor(name: string, path: string, sprites: Sprite[]) {
+        this.name = name
+        this.path = path
+        this.sprites = sprites
+    }
+}
+
+export enum InspectMode {
+    Collection,
+    Animation,
+}
+
+export class Animation {
     name: string
     clips: Clip[]
 

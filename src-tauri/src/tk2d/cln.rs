@@ -1,7 +1,8 @@
 use crate::tk2d::sprite::Sprite;
+use serde::Serialize;
 use std::path::PathBuf;
 
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
 pub struct Collection {
     pub name: String,
     pub path: PathBuf,

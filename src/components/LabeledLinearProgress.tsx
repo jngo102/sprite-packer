@@ -13,8 +13,8 @@ export default class LabeledLinearProgress extends Component<LabeledLinearProgre
     render() {
         return (
             <Grid item xs={12}>
-                <Box sx={{ display: 'flex', alignItems: 'center' }}>
-                    <Box sx={{ width: '100%', mr: 1 }}>
+                <Box sx={{ display: this.props.hidden ? "none" : "flex", alignItems: "center" }}>
+                    <Box sx={{ width: "100%", mr: 1 }}>
                         <LinearProgress variant="determinate" color={this.props.value >= 100 ? "success" : "secondary"} {...this.props} />
                     </Box>
                     <Box sx={{ minWidth: 35 }}>

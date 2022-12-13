@@ -4,13 +4,17 @@ import { appWindow } from '@tauri-apps/api/window'
 import LabeledLinearProgress from './components/LabeledLinearProgress'
 import SelectableList from './components/SelectableList'
 import Grid from '@mui/material/Grid'
-import { Clip, Library, ProgressPayload, Sprite } from './data/classes'
+import { Clip, Collection, InspectMode, Animation, ProgressPayload, Sprite } from './data/classes'
 
 interface AppState {
-  libraryNames: string[]
   currentClip: Clip | null
-  currentLibrary: Library | null
+  currentCollection: Collection | null
+  currentCollections: Collection[]
+  currentAnimation: Animation | null
   currentFrame: Sprite | null
+  inspectMode: InspectMode
+  isPacking: boolean
+  animationNames: string[]
   packProgress: number
 }
 
@@ -27,9 +31,13 @@ export default class App extends Component<{}, AppState> {
     super(props)
     this.state = {
       currentClip: null,
-      currentLibrary: null,
+      currentCollection: null,
+      currentCollections: [],
+      currentAnimation: null,
       currentFrame: null,
-      libraryNames: [],
+      inspectMode: InspectMode.Animation,
+      isPacking: false,
+      animationNames: [],
       packProgress: 0,
     }
 
@@ -43,31 +51,30 @@ export default class App extends Component<{}, AppState> {
 
     this.draw = this.draw.bind(this)
     this.incrementFrameIndex = this.incrementFrameIndex.bind(this)
-    this.packLibrary = this.packLibrary.bind(this)
+    this.packCollection = this.packCollection.bind(this)
     this.setCurrentClip = this.setCurrentClip.bind(this)
-    this.setCurrentLibrary = this.setCurrentLibrary.bind(this)
+    this.setCurrentCollection = this.setCurrentCollection.bind(this)
+    this.setCurrentAnimation = this.setCurrentAnimation.bind(this)
     this.setCurrentFrame = this.setCurrentFrame.bind(this)
   }
 
   async componentDidMount() {
     await appWindow.listen("progress", ({ event, payload }) => {
       this.setState({ packProgress: (payload as ProgressPayload).progress })
-      if (this.state.packProgress >= 100) {
-        var packButton = document.getElementById("pack-button") as HTMLButtonElement
-        packButton.disabled = false
-      }
     });
 
+    await appWindow.listen("enablePack", (_) => {
+      this.setState({ isPacking: false })
+    })
+
     await invoke('get_sprites_path').then(path => this.spritesPath = path as string)
-    await invoke('get_library_list').then(libraryList => {
-      this.setState({ libraryNames: libraryList as string[] }, () => {
-        if (this.state.libraryNames.length > 0) {
-          invoke('get_library', { libraryName: this.state.libraryNames[0] })
-            .then(library => {
-              if (library != null) {
-                var lib = library as Library
-                this.setCurrentLibrary(lib.name)
-              }
+    await invoke('get_animation_list').then(animationList => {
+      this.setState({ animationNames: animationList as string[] }, () => {
+        if (this.state.animationNames.length > 0) {
+          invoke('get_animation', { animationName: this.state.animationNames[0] })
+            .then(animation => {
+              const anim = animation as Animation
+              this.setCurrentAnimation(anim.name)
             })
         }
       })
@@ -83,29 +90,41 @@ export default class App extends Component<{}, AppState> {
     return (
       <Grid container>
         <Grid container item>
-          <LabeledLinearProgress id="pack-progress-bar" value={this.state.packProgress} />
-        </Grid>
-        <Grid container item>
-          <Grid item xs={12}>
-            <canvas id="clip-preview" />
+          <Grid alignItems="center" justifyContent="center" item xs={12}>
+            <canvas id="clip-preview" style={{ maxWidth: "100%", maxHeight: "100%" }} />
           </Grid>
         </Grid>
         <Grid container item>
-          <SelectableList items={this.state.libraryNames}
-            onSelectItem={this.setCurrentLibrary}
-            selectedItem={this.state.currentLibrary?.name as string}
-            title="Libraries" />
-          <SelectableList items={this.state.currentLibrary?.clips.map(clip => clip.name) as string[]}
+          <SelectableList items={this.state.animationNames}
+            onSelectItem={this.setCurrentAnimation}
+            selectedItem={this.state.currentAnimation?.name as string}
+            title="Animations" />
+          <SelectableList items={this.state.currentAnimation?.clips.map(clip => clip.name) as string[]}
             onSelectItem={this.setCurrentClip}
             selectedItem={this.state.currentClip?.name as string}
             title="Clips" />
-          <SelectableList items={this.state.currentClip?.frames.map(frame => frame.name) as string[]}
+          <SelectableList items={this.state.inspectMode == InspectMode.Collection
+            ? this.state.currentCollection?.sprites.map(sprite => sprite.name) as string[]
+            : this.state.currentClip?.frames.map(frame => frame.name) as string[]}
             onSelectItem={this.setCurrentFrame}
             selectedItem={this.state.currentFrame?.name as string}
             title="Frames" />
+          <SelectableList items={this.state.currentCollections?.map(cln => cln.name) as string[]}
+            onSelectItem={this.setCurrentCollection}
+            selectedItem={this.state.currentCollection?.name as string}
+            title="Original Atlases" />
+          <SelectableList items={this.state.currentCollections?.map(cln => cln.name) as string[]}
+            onSelectItem={this.setCurrentCollection}
+            selectedItem={this.state.currentCollection?.name as string}
+            title="Generated Atlases" />
         </Grid>
         <Grid container item>
-          <button id="pack-button" onClick={this.packLibrary}>Pack</button>
+          <Grid item xs={6} />
+          <Grid item alignItems="center" justifyContent="center" xs={2}>
+            <button id="pack-button" hidden={this.state.isPacking || this.state.inspectMode != InspectMode.Collection} onClick={this.packCollection}>Pack</button>
+            <LabeledLinearProgress id="pack-progress-bar" hidden={!this.state.isPacking} value={this.state.packProgress} />
+          </Grid>
+          <Grid item xs={2} />
         </Grid>
       </Grid>
     )
@@ -116,10 +135,20 @@ export default class App extends Component<{}, AppState> {
     invoke('debug', { msg: msg })
   }
 
-  draw() { 
-    const img = this.frameCache[this.state.currentClip?.currentFrameIndex as number]
+  draw() {
+    if (this.canvas == null) {
+      return
+    }
+
+    var img: HTMLImageElement | null = null
+    if (this.state.inspectMode == InspectMode.Animation) {
+      img = this.frameCache[this.state.currentClip?.currentFrameIndex as number]
+    } else if (this.state.inspectMode == InspectMode.Collection) {
+      img = this.frameCache[0]
+    }
+
     if (img != null) {
-      this.canvasContext?.clearRect(0, 0, this.canvas?.width as number, this.canvas?.height as number)
+      this.canvasContext?.clearRect(0, 0, this.canvas.width, this.canvas.height)
       this.canvasContext?.drawImage(img, 0, 0)
     }
 
@@ -136,21 +165,19 @@ export default class App extends Component<{}, AppState> {
     }
   }
 
-  async packLibrary() {
-    var packButton = document.getElementById("pack-button") as HTMLButtonElement
-    packButton.disabled = true
+  packCollection() {
     this.setState({ packProgress: 0 })
-
-    invoke('pack_library', { libraryName: this.state.currentLibrary?.name as string, window: appWindow })
+    this.setState({ isPacking: true })
+    invoke('pack_single_collection', { collectionName: this.state.currentCollection?.name as string })
   }
 
   setCurrentClip(clipName: string) {
     clearInterval(this.frameIntervalID as number)
-    var clip = this.state.currentLibrary?.clips.find(clip => clip.name == clipName)
+    const clip = this.state.currentAnimation?.clips.find(clip => clip.name == clipName)
     if (clip != undefined) {
       clip.currentFrameIndex = 0;
-      this.setState({ currentClip: clip })
-      this.framePaths = clip.frames.map(frame => convertFileSrc(`${this.spritesPath}/${this.state.currentLibrary?.name}/${clip?.name}/${frame.name}`))
+      this.setState({ currentClip: clip, inspectMode: InspectMode.Animation })
+      this.framePaths = clip.frames.map(frame => convertFileSrc(`${this.spritesPath}/${this.state.currentAnimation?.name}/${clip?.name}/${frame.name}`))
       this.frameCache = []
       var maxWidth = 0
       var maxHeight = 0
@@ -178,23 +205,82 @@ export default class App extends Component<{}, AppState> {
     }
   }
 
-  setCurrentLibrary(libraryName: string) {
-    invoke('get_library', { libraryName: libraryName })
-      .then(library => {
-        let lib = library as Library
-        this.setState({ currentLibrary: lib })
-        if (lib.clips.length > 0) {
-          this.setCurrentClip(lib.clips[0].name as string)
-        }
+  setCurrentCollection(collectionName: string) {
+    clearInterval(this.frameIntervalID)
+    const collection = this.state.currentCollections?.find(cln => cln.name == collectionName) as Collection
+    const img = new Image()
+    img.onload = () => {
+      if (this.canvas != null) {
+        this.canvas.width = img.width
+        this.canvas.height = img.height
+      }
+      this.frameCache = [img]
+    }
+    img.src = convertFileSrc(collection.path)
+    this.setState({ currentCollection: collection, currentFrame: null, inspectMode: InspectMode.Collection })
+  }
+
+  setCurrentAnimation(animationName: string) {
+    invoke('get_animation', { animationName: animationName })
+      .then(animation => {
+        const anim = animation as Animation
+        this.setState({ currentAnimation: anim, inspectMode: InspectMode.Animation }, () => {
+          if (anim.clips.length > 0) {
+            this.setCurrentClip(anim.clips[0].name as string)
+          }
+        })
+      })
+
+    invoke("get_collections_from_animation_name", { animationName: animationName })
+      .then(collections => {
+        const clns = collections as Collection[]
+        this.setState({ currentCollections: clns })
       })
   }
 
   setCurrentFrame(frameName: string) {
     clearInterval(this.frameIntervalID as number)
-    let frame = this.state.currentClip?.frames.find(frame => frame.name == frameName) as Sprite
-    this.setState({ currentFrame: frame })
-    if (this.state.currentClip != null) {
-      this.state.currentClip.currentFrameIndex = this.state.currentClip?.frames.indexOf(frame) as number
+    if (this.state.inspectMode == InspectMode.Animation) {
+      const frame = this.state.currentClip?.frames.find(frame => frame.name == frameName) as Sprite
+      this.setState({ currentFrame: frame })
+      const imgPath = convertFileSrc(`${this.spritesPath}/${frame.path}`)
+      const img = new Image()
+      img.onload = () => {
+        if (this.state.currentClip != null) {
+          this.state.currentClip.currentFrameIndex = 0
+        }
+        this.frameCache = [img]
+        if (this.canvas != null) {
+          this.canvas.width = img.width
+          this.canvas.height = img.height
+        }
+      }
+      img.src = imgPath
+    } else if (this.state.inspectMode == InspectMode.Collection) {
+      if (this.state.currentCollection != null) {
+        const sprite = this.state.currentCollection.sprites.find(sprite => sprite.name == frameName) as Sprite
+        const imgPath = convertFileSrc(`${this.spritesPath}/${sprite.path}`)
+        const img = new Image()
+        img.onload = () => {
+          this.frameCache = [img]
+          if (this.canvas != null) {
+            this.canvas.width = img.width
+            this.canvas.height = img.height
+          }
+        }
+        img.src = imgPath
+      }
+
+      invoke("get_animation_name_from_collection_name", { collectionName: this.state.currentCollection?.name as string })
+        .then(animationName => {
+          invoke("get_animation", { animationName: animationName })
+            .then(animation => {
+              const anim = animation as Animation
+              const clip = anim.clips.find(clip => clip.frames.find(frame => frame.name == frameName)) as Clip
+              const frame = clip.frames.find(frame => frame.name == frameName) as Sprite
+              this.setState({ currentClip: clip, currentFrame: frame })
+            })
+        })
     }
   }
 }
