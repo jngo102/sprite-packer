@@ -10,7 +10,7 @@ jobs:
         steps:
             - name: Get date format for release tag
               id: date
-              run: echo "today::$(date +'%d.%m.%Y')" >> $GITHUB_OUTPUT
+              run: echo "today=$(date +'%d.%m.%Y')" >> $GITHUB_OUTPUT
             - uses: actions/checkout@v2
             - name: Get version
               run: echo "PACKAGE_VERSION=$(node -p "require('./package.json').version")" >> $GITHUB_ENV
