@@ -22,12 +22,12 @@ export default class SelectableList extends Component<SelectableListProps, Selec
 
     render() {
         return (
-            <Grid item xs={2}>
+            <Grid item>
                 <List dense
                     disablePadding
                     sx={{
-                        maxHeight: window.innerHeight / 2,
-                        overflowY: 'auto'
+                        maxHeight: window.innerHeight - 64,
+                        overflowY: "auto"
                     }}>
                     <ListSubheader>
                         {this.props.title}

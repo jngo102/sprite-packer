@@ -15,8 +15,7 @@ use crate::tk2d::info::{AnimInfo, SpriteInfo};
 use crate::tk2d::anim::*;
 use directories::BaseDirs;
 use image::{DynamicImage, GenericImage, GenericImageView};
-use log::{error, info, LevelFilter};
-use native_dialog::FileDialog;
+use log::{error, info, LevelFilter, warn};
 use rayon::prelude::*;
 use serde::Serialize;
 use simple_logging;
@@ -28,8 +27,11 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Mutex;
-use tauri::{AppHandle, async_runtime, command, Manager, State, Window};
+use tauri::{AppHandle, async_runtime, command, CustomMenuItem, Manager, Menu, MenuItem, State, Submenu, Window};
+use tauri::async_runtime::JoinHandle;
+use tauri::api::dialog::blocking::FileDialogBuilder;
 
+/// A data structure containing the current pack progress
 #[derive(Clone, Serialize)]
 struct ProgressPayload {
     progress: usize,
@@ -37,6 +39,9 @@ struct ProgressPayload {
 
 struct AppState(Mutex<App>);
 
+static mut CURRENT_TASK: Option<JoinHandle<()>> = None;
+
+/// The name of the folder containing the log and settings files
 const SETTINGS_FOLDER: &str = "SpritePacker";
 
 /// Load the settings JSON file into the settings object, or create the file if it does not exist
@@ -85,6 +90,12 @@ fn check_settings(state: &AppState) -> bool {
     settings_exist
 }
 
+/// Get a collection by its name
+/// # Arguments
+/// * `collection_name` - The name of the collection
+/// * `collections` - A list of collections to search throuhg
+/// # Returns
+/// *`Collection` The collection with the given name
 fn get_collection(collection_name: String, collections: Vec<Collection>) -> Collection {
     return match collections.par_iter().find_first(|cln| cln.name == collection_name) {
         Some(collection) => collection.clone(),
@@ -104,9 +115,36 @@ fn setup_app() {
         select_sprites_path(&app_state);
     }
     load_collections_and_animations(&app_state);
+
+    let refresh = CustomMenuItem::new("refresh", "Refresh");
+    let set_sprites_path = CustomMenuItem::new("set_sprites_path", "Set Sprites Path");
+    let submenu = Menu::new()
+        .add_item(refresh)
+        .add_item(set_sprites_path)
+        .add_native_item(MenuItem::Separator)
+        .add_native_item(MenuItem::Quit);
+    let file_menu = Submenu::new("File", submenu);
+    let menu = Menu::new().add_submenu(file_menu);
+
     let app = tauri::Builder::default()
         .manage(app_state)
+        .menu(menu)
+        .on_menu_event(|event| match event.menu_item_id() {
+            "refresh" => {
+                match event.window().emit("refresh", ()) {
+                    Ok(_) => info!("Emitted refresh page event"),
+                    Err(e) => error!("Failed to send refresh page event: {}", e),
+                }
+            }
+            "set_sprites_path" => {
+                let app_handle = event.window().app_handle();
+                let state = app_handle.state::<AppState>();
+                select_sprites_path(&state);
+            }
+            _ => {}
+        })
         .invoke_handler(tauri::generate_handler![
+            cancel_pack,
             debug,
             get_collections_from_animation_name,
             get_clip_name_from_frame_name,
@@ -114,10 +152,8 @@ fn setup_app() {
             get_animation_name_from_clip_name,
             get_animation_name_from_collection_name,
             get_animation_list,
-            get_pack_progress,
             get_sprites_path,
-            pack_animation,
-            pack_single_collection,
+            pack_single_collection
         ])
         .build(tauri::generate_context!())
         .expect("Failed to build tauri application.");
@@ -173,6 +209,9 @@ fn setup_app() {
     });
 }
 
+/// Load collections and animations from sprite files on disk
+/// # Arguments
+/// * `state` - The application state
 fn load_collections_and_animations(state: &AppState) {
     let mut app_state = match state.0.lock() {
         Ok(state) => state,
@@ -276,7 +315,7 @@ fn load_collections_and_animations(state: &AppState) {
                                                                             Ok(mut frames) => frames.push(sprite),
                                                                             Err(e) => log_panic!("Failed to lock frames: {}", e),
                                                                         }
-                                                                    },
+                                                                    }
                                                                     Err(e) => log_panic!("Failed to get frame path: {}", e),
                                                                 }
                                                             });
@@ -358,6 +397,11 @@ fn load_collections_and_animations(state: &AppState) {
     (*app_state).loaded_animations.par_sort();
 }
 
+/// Packs a collection of sprites into an atlas
+/// # Arguments
+/// * `collection` - The collection to pack
+/// * `window` - The window to send events to
+/// * `sprites_path` - The path to sprite files
 async fn pack_collection(
     collection: Collection,
     window: Window,
@@ -367,11 +411,11 @@ async fn pack_collection(
         Ok(atlas) => atlas,
         Err(e) => log_panic!("Failed to open atlas file: {}", e),
     };
-    let mut sprite_num = 0 as usize;
+    let sprite_num = Mutex::new(0 as usize);
     let atlas_width = atlas.width();
     let atlas_height = atlas.height();
     let gen_atlas = Mutex::new(DynamicImage::new_rgba8(atlas_width, atlas_height));
-    for sprite in collection.sprites.iter() {
+    collection.sprites.par_iter().for_each(|sprite| {
         let frame_path = match PathBuf::from_str(sprites_path.as_str()) {
             Ok(path) => path.join(sprite.path.clone()),
             Err(e) => log_panic!("Failed to create frame path from string: {}", e),
@@ -404,40 +448,43 @@ async fn pack_collection(
                                 cmp::max(y, 0i32) as u32,
                                 frame_image.get_pixel(i as u32, frame_image.height() - j as u32 - 1),
                             );
-                        },
+                        }
                         Err(e) => log_panic!("Failed to lock generated atlas: {}", e),
                     }
                 }
             });
         });
 
-        sprite_num += 1;
-        match window.emit("progress", ProgressPayload { progress: sprite_num * 100 / collection.sprites.len() }) {
-            Ok(_) => info!("Emitted progress event. Progress value: {}", sprite_num * 100 / collection.sprites.len()),
-            Err(e) => log_panic!("Failed to emit progress event: {}", e),
-        }
-    }
-
-    let atlas_path = match FileDialog::new()
-        .set_location(&sprites_path)
-        .add_filter("PNG Image", &["png"])
-        .show_save_single_file() {
-            Ok(option) => match option {
-                Some(path) => path,
-                None => return,
-            },
-            Err(e) => log_panic!("Failed to open file dialog: {}", e)
-        };
-
-    match gen_atlas.lock() {
-        Ok(atlas) => {
-            match atlas.save(atlas_path.clone()) {
-                Ok(_) => info!("Generated atlas saved to {:?}", atlas_path.display()),
-                Err(e) => log_panic!("Failed to save atlas: {}", e),
+        match sprite_num.lock() {
+            Ok(mut num) => {
+                *num += 1;
+                match window.emit("progress", ProgressPayload { progress: *num * 100 / collection.sprites.len() }) {
+                    Ok(_) => info!("Emitted progress event. Progress value: {}", *num * 100 / collection.sprites.len()),
+                    Err(e) => log_panic!("Failed to emit progress event: {}", e),
+                }
             }
-        },
-        Err(e) => log_panic!("Failed to lock generated atlas: {}", e),
-    }
+            Err(e) => log_panic!("Failed to lock sprite_num: {}", e),
+        }
+    });
+
+    match FileDialogBuilder::new()
+        .set_directory(&sprites_path)
+        .set_file_name(format!("{}.png", collection.name.clone()).as_str())
+        .add_filter("PNG Image", &["png"])
+        .save_file() {
+            Some(atlas_path) => {
+                match gen_atlas.lock() {
+                    Ok(atlas) => {
+                        match atlas.save(atlas_path.clone()) {
+                            Ok(_) => info!("Generated atlas saved to {:?}", atlas_path.display()),
+                            Err(e) => log_panic!("Failed to save atlas: {}", e),
+                        }
+                    }
+                    Err(e) => log_panic!("Failed to lock generated atlas: {}", e),
+                }
+            }
+            None => warn!("Generated atlas not saved.")
+        }
 
     match window.emit("enablePack", ()) {
         Ok(_) => info!("Emitted enablePack event."),
@@ -445,39 +492,66 @@ async fn pack_collection(
     }
 }
 
+/// Select folder containing animation files
+/// # Arguments
+/// * `state` - The application state
 fn select_sprites_path(state: &AppState) {
-    let selected_path = FileDialog::new()
-        .set_location("~")
-        .show_open_single_dir()
-        .unwrap();
-    let selected_path = match selected_path {
-        Some(path) => path,
-        None => {
-            error!("Selected path is not valid.");
-            return;
-        }
-    };
-
     let mut app_state = match state.0.lock() {
         Ok(state) => state,
         Err(e) => log_panic!("Failed to lock app state: {}", e),
     };
-    app_state.settings.sprites_path = match selected_path.into_os_string().into_string() {
-        Ok(path) => path,
-        Err(e) => {
-            error!("Failed to convert path to string: {:?}", e);
-            return;
+
+    app_state.settings.sprites_path = "".to_string();
+    while app_state.settings.sprites_path == "".to_string() {
+        match FileDialogBuilder::new()
+            .set_directory("~")
+            .pick_folder() {
+                Some(folder_path) => {
+                    app_state.settings.sprites_path = match folder_path.into_os_string().into_string() {
+                        Ok(path) => path,
+                        Err(e) => {
+                            error!("Failed to convert path to string: {:?}", e);
+                            return;
+                        }
+                    };
+                }
+                None => warn!("No path for sprites folder selected.")
+            }
         }
-    };
 
     info!("Selected sprites path as: {}", app_state.settings.sprites_path);
 }
 
+/// Cancel the currently running pack task
+#[command]
+fn cancel_pack() {
+    unsafe {
+        match &CURRENT_TASK {
+            Some(task) => {
+                info!("Aborting task");
+                task.abort();
+                task.inner().abort();
+                drop(task);
+            }
+            None => warn!("No task to cancel."),
+        }
+    }
+}
+
+/// Log a debug message
+/// # Arguments
+/// * `msg` - The message to log
 #[command]
 fn debug(msg: String) {
     info!("{}", msg);
 }
 
+/// Get an array of collections from an animation's name
+/// # Arguments
+/// * `animation_name` - The name of the animation
+/// * `state` - The application state
+/// # Returns
+/// * `Vec<Collection>` - The collections used by the animation
 #[command]
 fn get_collections_from_animation_name(animation_name: String, state: State<AppState>) -> Vec<Collection> {
     let animation = get_animation(animation_name.clone(), state.clone());
@@ -505,6 +579,12 @@ fn get_collections_from_animation_name(animation_name: String, state: State<AppS
     return collections;
 }
 
+/// Get a clip's name from a frame's name
+/// # Arguments
+/// * `frame_name` - The name of the frame
+/// * `state` - The application state
+/// # Returns
+/// * `String` - The name of the clip
 #[command]
 fn get_clip_name_from_frame_name(frame_name: String, state: State<AppState>) -> String {
     let app_state = match state.0.lock() {
@@ -524,6 +604,12 @@ fn get_clip_name_from_frame_name(frame_name: String, state: State<AppState>) -> 
     clip.name
 }
 
+/// Get an animation by its name
+/// # Arguments
+/// * `animation_name` - The name of the animation
+/// * `state` - The application state
+/// # Returns
+/// * `Animation` - The returned animation
 #[command]
 fn get_animation(animation_name: String, state: State<AppState>) -> Animation {
     let app_state = match state.0.lock() {
@@ -540,6 +626,12 @@ fn get_animation(animation_name: String, state: State<AppState>) -> Animation {
     }
 }
 
+/// Get an animation's name from a clip's name
+/// # Arguments
+/// * `clip_name` - The name of the clip
+/// * `state` - The application state
+/// # Returns
+/// * `String` - The name of the animation
 #[command]
 fn get_animation_name_from_clip_name(clip_name: String, state: State<AppState>) -> String {
     let app_state = match state.0.lock() {
@@ -561,6 +653,12 @@ fn get_animation_name_from_clip_name(clip_name: String, state: State<AppState>) 
     return animation.name.clone();
 }
 
+/// Get an animation's name from a collection's name
+/// # Arguments
+/// * `collection_name` - The name of the collection
+/// * `state` - The application state
+/// # Returns
+/// * `String` - The returned name of the animation
 #[command]
 fn get_animation_name_from_collection_name(collection_name: String, state: State<AppState>) -> String {
     let app_state = match state.0.lock() {
@@ -585,6 +683,11 @@ fn get_animation_name_from_collection_name(collection_name: String, state: State
     animation.name
 }
 
+/// Get a list of animation names
+/// # Arguments
+/// * `state` - The application state
+/// # Returns
+/// * `Vec<String>` - The returned list of animation names
 #[command]
 fn get_animation_list(state: State<AppState>) -> Vec<String> {
     let app_state = match state.0.lock() {
@@ -605,16 +708,11 @@ fn get_animation_list(state: State<AppState>) -> Vec<String> {
     };
 }
 
-#[command]
-fn get_pack_progress(state: State<AppState>) -> usize {
-    let app_state = match state.0.lock() {
-        Ok(state) => state,
-        Err(e) => log_panic!("Failed to lock app state: {}", e),
-    };
-    info!("Current pack progress: {}", app_state.current_pack_progress);
-    app_state.current_pack_progress
-}
-
+/// Get the path to the sprites folder
+/// # Arguments
+/// * `state` - The application state
+/// # Returns
+/// * `String` - The returned path to the sprites folder
 #[command]
 fn get_sprites_path(state: State<AppState>) -> String {
     let app_state = match state.0.lock() {
@@ -624,6 +722,11 @@ fn get_sprites_path(state: State<AppState>) -> String {
     app_state.settings.sprites_path.clone()
 }
 
+/// Pack a single collection
+/// # Arguments
+/// * `collection_name` - The name of the collection
+/// * `app_handle` - The application handle
+/// * `state` - The application state
 #[command]
 fn pack_single_collection(collection_name: String, app_handle: AppHandle, state: State<AppState>) {
     let app_state = match state.0.lock() {
@@ -635,49 +738,17 @@ fn pack_single_collection(collection_name: String, app_handle: AppHandle, state:
         Some(window) => window,
         None => log_panic!("Failed to get main window"),
     };
-    async_runtime::spawn(
-        pack_collection(
-            collection,
-            window.clone(),
-            app_state.settings.sprites_path.clone()
-        )
-    );
-}
 
-#[command]
-fn pack_animation(animation_name: String, app_handle: AppHandle, state: State<AppState>) {
-    let app_state = match state.0.lock() {
-        Ok(state) => state,
-        Err(e) => log_panic!("Failed to lock app state: {}", e),
-    };
-    let window = match app_handle.get_window("main") {
-        Some(window) => window,
-        None => log_panic!("Failed to get main window"),
-    };
-    let animation = get_animation(animation_name.clone(), state.clone());
-    let mut collection_names = animation
-        .clips
-        .par_iter()
-        .map(|clip| {
-            clip.frames
-                .par_iter()
-                .map(|frame| frame.collection_name.clone())
-        })
-        .flatten() 
-        .collect::<Vec<String>>();
-    collection_names.par_sort();
-    collection_names.dedup();
-    let collections = collection_names
-        .par_iter()
-        .map(|collection_name| get_collection(collection_name.clone(), app_state.loaded_collections.clone()))
-        .collect::<Vec<Collection>>();
-    for collection in collections {
-        async_runtime::spawn(
+    let sprites_path = app_state.settings.sprites_path.clone();
+
+    unsafe {
+        cancel_pack();
+        CURRENT_TASK = Some(async_runtime::spawn(
             pack_collection(
                 collection,
                 window.clone(),
-                app_state.settings.sprites_path.clone()
+                sprites_path
             )
-        );
+        ));
     }
 }

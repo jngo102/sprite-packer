@@ -49,6 +49,7 @@ export default class App extends Component<{}, AppState> {
     this.packIntervalID = -1
     this.spritesPath = ""
 
+    this.cancelPack = this.cancelPack.bind(this)
     this.draw = this.draw.bind(this)
     this.incrementFrameIndex = this.incrementFrameIndex.bind(this)
     this.packCollection = this.packCollection.bind(this)
@@ -59,19 +60,23 @@ export default class App extends Component<{}, AppState> {
   }
 
   async componentDidMount() {
-    await appWindow.listen("progress", ({ event, payload }) => {
-      this.setState({ packProgress: (payload as ProgressPayload).progress })
-    });
-
     await appWindow.listen("enablePack", (_) => {
       this.setState({ isPacking: false })
     })
 
-    await invoke('get_sprites_path').then(path => this.spritesPath = path as string)
-    await invoke('get_animation_list').then(animationList => {
+    await appWindow.listen("progress", ({ event, payload }) => {
+      this.setState({ packProgress: (payload as ProgressPayload).progress })
+    });
+
+    await appWindow.listen("refresh", (_) => {
+      window.location.reload()
+    })
+
+    await invoke("get_sprites_path").then(path => this.spritesPath = path as string)
+    await invoke("get_animation_list").then(animationList => {
       this.setState({ animationNames: animationList as string[] }, () => {
         if (this.state.animationNames.length > 0) {
-          invoke('get_animation', { animationName: this.state.animationNames[0] })
+          invoke("get_animation", { animationName: this.state.animationNames[0] })
             .then(animation => {
               const anim = animation as Animation
               this.setCurrentAnimation(anim.name)
@@ -88,12 +93,7 @@ export default class App extends Component<{}, AppState> {
 
   render() {
     return (
-      <Grid container>
-        <Grid container item>
-          <Grid alignItems="center" justifyContent="center" item xs={12}>
-            <canvas id="clip-preview" style={{ maxWidth: "100%", maxHeight: "100%" }} />
-          </Grid>
-        </Grid>
+      <Grid container columns={{ xs: 7 }}>
         <Grid container item>
           <SelectableList items={this.state.animationNames}
             onSelectItem={this.setCurrentAnimation}
@@ -109,30 +109,51 @@ export default class App extends Component<{}, AppState> {
             onSelectItem={this.setCurrentFrame}
             selectedItem={this.state.currentFrame?.name as string}
             title="Frames" />
-          <SelectableList items={this.state.currentCollections?.map(cln => cln.name) as string[]}
-            onSelectItem={this.setCurrentCollection}
-            selectedItem={this.state.currentCollection?.name as string}
-            title="Original Atlases" />
-          <SelectableList items={this.state.currentCollections?.map(cln => cln.name) as string[]}
-            onSelectItem={this.setCurrentCollection}
-            selectedItem={this.state.currentCollection?.name as string}
-            title="Generated Atlases" />
-        </Grid>
-        <Grid container item>
-          <Grid item xs={6} />
-          <Grid item alignItems="center" justifyContent="center" xs={2}>
-            <button id="pack-button" hidden={this.state.isPacking || this.state.inspectMode != InspectMode.Collection} onClick={this.packCollection}>Pack</button>
-            <LabeledLinearProgress id="pack-progress-bar" hidden={!this.state.isPacking} value={this.state.packProgress} />
+          <Grid container item xs={2}>
+            <Grid item>
+              <canvas id="clip-preview" style={{ maxWidth: "100%", maxHeight: "100%" }} />
+            </Grid>
+            <SelectableList items={this.state.currentCollections?.map(cln => cln.name) as string[]}
+              onSelectItem={this.setCurrentCollection}
+              selectedItem={this.state.currentCollection?.name as string}
+              title="Atlases" />
           </Grid>
-          <Grid item xs={2} />
+        </Grid>
+        <Grid container item xs={12}>
+          <Grid alignItems="stretch" item xs={12}>
+            <button hidden={this.state.isPacking || this.state.inspectMode != InspectMode.Collection}
+              id="pack-button"
+              style={{ padding: "16 16 8 8", width: "100%" }}
+              onClick={this.packCollection}>
+              Pack
+            </button>
+            <Grid container item>
+              <LabeledLinearProgress hidden={!this.state.isPacking}
+                id="pack-progress-bar"
+                text={`Packing ${this.state.currentCollection?.name as string}`}
+                value={this.state.packProgress} />
+              <Grid item xs={2}>
+                <button hidden={!this.state.isPacking}
+                  id="cancel-pack-button"
+                  onClick={this.cancelPack}>
+                    Cancel
+                </button>
+              </Grid>
+            </Grid>
+          </Grid>
         </Grid>
       </Grid>
     )
   }
 
+  cancelPack() {
+    this.setState({ isPacking: false })
+    invoke("cancel_pack")
+  }
+
   debug(msg: string) {
     console.log("Debug: " + msg)
-    invoke('debug', { msg: msg })
+    invoke("debug", { msg })
   }
 
   draw() {
@@ -168,7 +189,7 @@ export default class App extends Component<{}, AppState> {
   packCollection() {
     this.setState({ packProgress: 0 })
     this.setState({ isPacking: true })
-    invoke('pack_single_collection', { collectionName: this.state.currentCollection?.name as string })
+    invoke("pack_single_collection", { collectionName: this.state.currentCollection?.name as string })
   }
 
   setCurrentClip(clipName: string) {
@@ -221,7 +242,7 @@ export default class App extends Component<{}, AppState> {
   }
 
   setCurrentAnimation(animationName: string) {
-    invoke('get_animation', { animationName: animationName })
+    invoke("get_animation", { animationName })
       .then(animation => {
         const anim = animation as Animation
         this.setState({ currentAnimation: anim, inspectMode: InspectMode.Animation }, () => {

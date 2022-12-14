@@ -5,11 +5,11 @@ import CssBaseline from '@mui/material/CssBaseline'
 
 const darkTheme = createTheme({
   palette: {
-    mode: 'dark'
+    mode: "dark"
   }
 })
 
-ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
+ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <ThemeProvider theme={darkTheme}>
     <CssBaseline enableColorScheme />
     <App />
