@@ -8,7 +8,6 @@ mod tk2d;
 mod macros;
 
 use crate::app::app::App;
-use crate::app::settings::Settings;
 use crate::tk2d::clip::Clip;
 use crate::tk2d::cln::Collection;
 use crate::tk2d::info::{AnimInfo, SpriteInfo};
@@ -21,25 +20,29 @@ use serde::Serialize;
 use simple_logging;
 use std::cmp;
 use std::env;
-use std::fs;
-use std::fs::File;
+use std::fs::{File, self};
 use std::io::Write;
+use std::ops::ControlFlow;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Mutex;
-use tauri::{AppHandle, async_runtime, command, CustomMenuItem, Manager, Menu, MenuItem, State, Submenu, Window};
-use tauri::async_runtime::JoinHandle;
+use std::sync::mpsc::{Receiver, self, Sender};
+use std::time::Instant;
+use tauri::{AppHandle, command, CustomMenuItem, Manager, Menu, MenuItem, State, Submenu, Window};
 use tauri::api::dialog::blocking::FileDialogBuilder;
+use tauri::async_runtime;
+use tauri::RunEvent::ExitRequested;
 
 /// A data structure containing the current pack progress
 #[derive(Clone, Serialize)]
 struct ProgressPayload {
-    progress: usize,
+    progress: usize
 }
 
 struct AppState(Mutex<App>);
 
-static mut CURRENT_TASK: Option<JoinHandle<()>> = None;
+static mut TX: Mutex<Option<Sender<()>>> = Mutex::new(None);
+static mut RX: Mutex<Option<Receiver<()>>> = Mutex::new(None);
 
 /// The name of the folder containing the log and settings files
 const SETTINGS_FOLDER: &str = "SpritePacker";
@@ -49,41 +52,47 @@ const SETTINGS_FOLDER: &str = "SpritePacker";
 /// # Arguments
 /// * `state` - The state of the application
 fn check_settings(state: &AppState) -> bool {
-    let base_dir = BaseDirs::new().unwrap();
-    let settings_dir: PathBuf = [base_dir.data_dir().to_str().unwrap(), SETTINGS_FOLDER]
+    let base_dir = match BaseDirs::new() {
+        Some(dirs) => dirs,
+        None => log_panic!("Failed to get base directories"),
+    };
+    let data_dir = match base_dir.data_dir().to_str() {
+        Some(dir) => dir,
+        None => log_panic!("Failed to convert data directory to string"),
+    };
+    let settings_dir: PathBuf = [data_dir, SETTINGS_FOLDER]
         .iter()
         .collect();
     let settings_exist = settings_dir.exists();
     if !settings_exist {
         match fs::create_dir(settings_dir.as_path()) {
             Ok(_) => info!("Created settings and log directory"),
-            Err(e) => error!("Failed to create settings folder: {}", e),
+            Err(e) => log_panic!("Failed to create settings folder: {}", e),
         }
     }
 
-    let settings_string = settings_dir.to_str().unwrap();
-    let log_path = format!("{}/SpritePacker.Log", settings_string);
-    match simple_logging::log_to_file(log_path.as_str(), LevelFilter::Info) {
-        Ok(_) => info!("Opened logger at: {}", log_path.as_str()),
+    let log_path = settings_dir.join("SpritePacker.log");
+    match simple_logging::log_to_file(log_path.clone(), LevelFilter::Info) {
+        Ok(_) => info!("Opened logger at: {}", log_path.display()),
         Err(e) => {
             println!("Failed to open logger: {}", e);
             return false;
         }
     }
 
-    let settings_path = format!("{}/Settings.json", settings_string);
-    if PathBuf::from_str(settings_path.as_str()).unwrap().exists() {
+    let settings_path = settings_dir.join("Settings.json");
+    if settings_path.exists() {
         let mut app_state = match state.0.lock() {
             Ok(state) => state,
             Err(e) => log_panic!("Failed to lock app state: {}", e),
         };
-        let settings_raw_text = fs::read_to_string(settings_path).unwrap();
+        let settings_raw_text = match fs::read_to_string(settings_path) {
+            Ok(text) => text,
+            Err(e) => log_panic!("Failed to read settings file: {}", e),
+        };
         app_state.settings = match serde_json::from_str(settings_raw_text.as_str()) {
             Ok(settings) => settings,
-            Err(e) => {
-                error!("Failed to deserialize settings: {}", e);
-                Settings::default()
-            }
+            Err(e) => log_panic!("Failed to deserialize settings: {}", e),
         };
     }
 
@@ -116,24 +125,31 @@ fn setup_app() {
     }
     load_collections_and_animations(&app_state);
 
-    let refresh = CustomMenuItem::new("refresh", "Refresh");
+    let refresh = CustomMenuItem::new("refresh", "Refresh").accelerator("F5");
     let set_sprites_path = CustomMenuItem::new("set_sprites_path", "Set Sprites Path");
+    let quit = CustomMenuItem::new("quit", "Quit").accelerator("Alt+F4");
     let submenu = Menu::new()
         .add_item(refresh)
         .add_item(set_sprites_path)
         .add_native_item(MenuItem::Separator)
-        .add_native_item(MenuItem::Quit);
-    let file_menu = Submenu::new("File", submenu);
-    let menu = Menu::new().add_submenu(file_menu);
+        .add_item(quit);
+    let options_menu = Submenu::new("Options", submenu);
+    let menu = Menu::new().add_submenu(options_menu);
 
     let app = tauri::Builder::default()
         .manage(app_state)
         .menu(menu)
         .on_menu_event(|event| match event.menu_item_id() {
+            "quit" => {
+                match event.window().close() {
+                    Ok(_) => info!("Successfully closed window from Options menu"),
+                    Err(e) => log_panic!("Failed to close window from Options menu: {}", e),
+                }
+            }
             "refresh" => {
                 match event.window().emit("refresh", ()) {
-                    Ok(_) => info!("Emitted refresh page event"),
-                    Err(e) => error!("Failed to send refresh page event: {}", e),
+                    Ok(_) => info!("Successfully emitted refresh event from Options menu"),
+                    Err(e) => log_panic!("Failed to emit refresh event: {}", e),
                 }
             }
             "set_sprites_path" => {
@@ -146,20 +162,22 @@ fn setup_app() {
         .invoke_handler(tauri::generate_handler![
             cancel_pack,
             debug,
-            get_collections_from_animation_name,
-            get_clip_name_from_frame_name,
             get_animation,
             get_animation_name_from_clip_name,
             get_animation_name_from_collection_name,
             get_animation_list,
+            get_collections_from_animation_name,
+            get_clip_name_from_frame_name,
+            get_language,
             get_sprites_path,
-            pack_single_collection
+            pack_single_collection,
+            set_language
         ])
         .build(tauri::generate_context!())
         .expect("Failed to build tauri application.");
 
     app.run(move |app_handle, event| match event {
-        tauri::RunEvent::ExitRequested { api, .. } => {
+        ExitRequested { api, .. } => {
             api.prevent_exit();
 
             let state = app_handle.state::<AppState>();
@@ -175,12 +193,10 @@ fn setup_app() {
             if !settings_dir.exists() {
                 match fs::create_dir(settings_dir.as_path()) {
                     Ok(_) => info!("Succesfully created settings folder."),
-                    Err(e) => error!("Failed to create settings folder: {}", e),
+                    Err(e) => log_panic!("Failed to create settings folder: {}", e),
                 }
             }
-            let settings_path: PathBuf = [settings_dir.to_str().unwrap(), "Settings.json"]
-                .iter()
-                .collect();
+            let settings_path = settings_dir.join("Settings.json");
             // Save or create a settings file
             if settings_path.exists() {
                 let settings_file = File::options()
@@ -189,17 +205,20 @@ fn setup_app() {
                     .unwrap();
                 match serde_json::to_writer_pretty(settings_file, &settings) {
                     Ok(_) => info!("Successfully saved settings."),
-                    Err(e) => error!("Failed to save settings: {}", e),
+                    Err(e) => log_panic!("Failed to save settings: {}", e),
                 }
             } else {
-                let mut settings_file = File::create(settings_path.as_path()).unwrap();
+                let mut settings_file = match File::create(settings_path.as_path()) {
+                    Ok(file) => file,
+                    Err(e) => log_panic!("Failed to create settings file: {}", e),
+                };
                 let settings_string = match serde_json::to_string(&app_state.settings) {
                     Ok(settings) => settings,
                     Err(e) => log_panic!("Failed to serialize settings: {}", e),
                 };
                 match settings_file.write_all(settings_string.as_bytes()) {
                     Ok(_) => info!("Successfully created new settings file."),
-                    Err(e) => error!("Failed to create new settings file: {}", e),
+                    Err(e) => log_panic!("Failed to create new settings file: {}", e),
                 }
             }
 
@@ -407,6 +426,8 @@ async fn pack_collection(
     window: Window,
     sprites_path: String
 ) {
+    let start = Instant::now();
+    let running_task = Mutex::new(true);
     let atlas = match image::open(collection.path.clone()) {
         Ok(atlas) => atlas,
         Err(e) => log_panic!("Failed to open atlas file: {}", e),
@@ -415,7 +436,7 @@ async fn pack_collection(
     let atlas_width = atlas.width();
     let atlas_height = atlas.height();
     let gen_atlas = Mutex::new(DynamicImage::new_rgba8(atlas_width, atlas_height));
-    collection.sprites.par_iter().for_each(|sprite| {
+    collection.sprites.par_iter().try_for_each(|sprite| {
         let frame_path = match PathBuf::from_str(sprites_path.as_str()) {
             Ok(path) => path.join(sprite.path.clone()),
             Err(e) => log_panic!("Failed to create frame path from string: {}", e),
@@ -425,8 +446,8 @@ async fn pack_collection(
             Err(e) => log_panic!("Failed to open frame image at {:?}: {}", frame_path.display(), e),
         };
 
-        (0..frame_image.width() as i32).into_par_iter().for_each(|i| {
-            (0..frame_image.height() as i32).into_par_iter().for_each(|j| {
+        (0..frame_image.width() as i32).into_par_iter().try_for_each(|i| {
+            (0..frame_image.height() as i32).into_par_iter().try_for_each(|j| {
                 let x = if sprite.flipped {
                     sprite.x + j - sprite.yr
                 } else {
@@ -452,7 +473,30 @@ async fn pack_collection(
                         Err(e) => log_panic!("Failed to lock generated atlas: {}", e),
                     }
                 }
+
+                unsafe {
+                    match RX.lock().expect("Failed to lock rx").as_ref() {
+                        Some(rx) => {
+                            match rx.try_recv() {
+                                Ok(_) => {
+                                    *running_task.lock().expect("Failed to lock running_task") = false;
+                                    return ControlFlow::Break(());
+                                },
+                                Err(_) => {}
+                            }
+                        }
+                        None => log_panic!("RX is None"),
+                    }
+                }
+
+                ControlFlow::Continue(())
             });
+
+            if *running_task.lock().expect("Failed to lock running_task") == false {
+                return ControlFlow::Break(());
+            }
+
+            ControlFlow::Continue(())
         });
 
         match sprite_num.lock() {
@@ -465,7 +509,16 @@ async fn pack_collection(
             }
             Err(e) => log_panic!("Failed to lock sprite_num: {}", e),
         }
+
+        if *running_task.lock().expect("Failed to lock running_task") == false {
+            return ControlFlow::Break(());
+        }
+
+        ControlFlow::Continue(())
     });
+
+    let stop = Instant::now();
+    info!("Time to pack collection {:?}: {} ms", collection.name, stop.duration_since(start).as_millis());
 
     match FileDialogBuilder::new()
         .set_directory(&sprites_path)
@@ -509,10 +562,7 @@ fn select_sprites_path(state: &AppState) {
                 Some(folder_path) => {
                     app_state.settings.sprites_path = match folder_path.into_os_string().into_string() {
                         Ok(path) => path,
-                        Err(e) => {
-                            error!("Failed to convert path to string: {:?}", e);
-                            return;
-                        }
+                        Err(e) => log_panic!("Failed to convert path to string: {:?}", e),
                     };
                 }
                 None => warn!("No path for sprites folder selected.")
@@ -526,14 +576,17 @@ fn select_sprites_path(state: &AppState) {
 #[command]
 fn cancel_pack() {
     unsafe {
-        match &CURRENT_TASK {
-            Some(task) => {
-                info!("Aborting task");
-                task.abort();
-                task.inner().abort();
-                drop(task);
+        match &TX.lock() {
+            Ok(tx) => match tx.as_ref() {
+                Some(tx) => {
+                    match tx.send(()) {
+                        Ok(_) => info!("Sent cancel pack signal."),
+                        Err(e) => log_panic!("Failed to send cancel pack signal: {}", e),
+                    }
+                }
+                None => warn!("No cancel signal sent."),
             }
-            None => warn!("No task to cancel."),
+            Err(e) => log_panic!("Failed to lock tx: {}", e)
         }
     }
 }
@@ -708,6 +761,20 @@ fn get_animation_list(state: State<AppState>) -> Vec<String> {
     };
 }
 
+/// Get the current language from settings
+/// # Arguments
+/// * `state` - The application state
+/// # Returns
+/// * `String` - The returned language
+#[command]
+fn get_language(state: State<AppState>) -> String {
+    let app_state = match state.0.lock() {
+        Ok(state) => state,
+        Err(e) => log_panic!("Failed to lock app state: {}", e),
+    };
+    app_state.settings.language.clone()
+}
+
 /// Get the path to the sprites folder
 /// # Arguments
 /// * `state` - The application state
@@ -742,13 +809,45 @@ fn pack_single_collection(collection_name: String, app_handle: AppHandle, state:
     let sprites_path = app_state.settings.sprites_path.clone();
 
     unsafe {
-        cancel_pack();
-        CURRENT_TASK = Some(async_runtime::spawn(
-            pack_collection(
-                collection,
-                window.clone(),
-                sprites_path
-            )
-        ));
+        let (tx, rx) = mpsc::channel();
+        TX = Mutex::new(Some(tx));
+        RX = Mutex::new(Some(rx));
+        async_runtime::spawn(pack_collection(collection, window, sprites_path));
     }
+}
+
+#[command]
+fn set_language(language: String, menu_items: Vec<String>, app_handle: AppHandle, state: State<AppState>) {
+    let mut app_state = match state.0.lock() {
+        Ok(state) => state,
+        Err(e) => log_panic!("Failed to lock app state: {}", e),
+    };
+
+    let menu_handle = match app_handle.get_window("main") {
+        Some(window) => window.menu_handle(),
+        None => log_panic!("Failed to get main window"),
+    };
+
+    let mut i = 0;
+
+    match menu_handle.get_item("quit").set_title(menu_items[i].clone()) {
+        Ok(_) => info!("Quit label is now {}", menu_items[i].clone()),
+        Err(e) => log_panic!("Failed to set title of Quit menu to {}: {}", menu_items[i].clone(), e),
+    }
+
+    i += 1;
+
+    match menu_handle.get_item("refresh").set_title(menu_items[i].clone()) {
+        Ok(_) => info!("Refresh label is now {}", menu_items[i].clone()),
+        Err(e) => log_panic!("Failed to set title of Refresh menu to {}: {}", menu_items[i].clone(), e),
+    }
+
+    i += 1;
+    
+    match menu_handle.get_item("set_sprites_path").set_title(menu_items[i].clone()) {
+        Ok(_) => info!("Set Sprites Path label is now {}", menu_items[i].clone()),
+        Err(e) => log_panic!("Failed to set title of Set Sprites Path menu to {}: {}", menu_items[i].clone(), e),
+    }
+        
+    app_state.settings.language = language;
 }

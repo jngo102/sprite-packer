@@ -2436,6 +2436,7 @@ dependencies = [
  "simple-logging",
  "tauri",
  "tauri-build",
+ "tauri-runtime-wry",
 ]
 
 [[package]]

@@ -13,7 +13,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            language: "English".to_string(),
+            language: "en".to_string(),
             sprites_path: String::new(),
             theme: "Dark".to_string(),
         }
