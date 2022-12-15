@@ -12,7 +12,7 @@ use crate::tk2d::clip::Clip;
 use crate::tk2d::cln::Collection;
 use crate::tk2d::info::{AnimInfo, SpriteInfo};
 use crate::tk2d::anim::*;
-use directories::BaseDirs;
+use app::settings::Settings;
 use image::{DynamicImage, GenericImage, GenericImageView};
 use log::{error, info, LevelFilter, warn};
 use rayon::prelude::*;
@@ -20,8 +20,7 @@ use serde::Serialize;
 use simple_logging;
 use std::cmp;
 use std::env;
-use std::fs::{File, self};
-use std::io::Write;
+use std::fs;
 use std::ops::ControlFlow;
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -45,59 +44,7 @@ static mut TX: Mutex<Option<Sender<()>>> = Mutex::new(None);
 static mut RX: Mutex<Option<Receiver<()>>> = Mutex::new(None);
 
 /// The name of the folder containing the log and settings files
-const SETTINGS_FOLDER: &str = "SpritePacker";
-
-/// Load the settings JSON file into the settings object, or create the file if it does not exist
-/// and open the log file
-/// # Arguments
-/// * `state` - The state of the application
-fn check_settings(state: &AppState) -> bool {
-    let base_dir = match BaseDirs::new() {
-        Some(dirs) => dirs,
-        None => log_panic!("Failed to get base directories"),
-    };
-    let data_dir = match base_dir.data_dir().to_str() {
-        Some(dir) => dir,
-        None => log_panic!("Failed to convert data directory to string"),
-    };
-    let settings_dir: PathBuf = [data_dir, SETTINGS_FOLDER]
-        .iter()
-        .collect();
-    let settings_exist = settings_dir.exists();
-    if !settings_exist {
-        match fs::create_dir(settings_dir.as_path()) {
-            Ok(_) => info!("Created settings and log directory"),
-            Err(e) => log_panic!("Failed to create settings folder: {}", e),
-        }
-    }
-
-    let log_path = settings_dir.join("SpritePacker.log");
-    match simple_logging::log_to_file(log_path.clone(), LevelFilter::Info) {
-        Ok(_) => info!("Opened logger at: {}", log_path.display()),
-        Err(e) => {
-            println!("Failed to open logger: {}", e);
-            return false;
-        }
-    }
-
-    let settings_path = settings_dir.join("Settings.json");
-    if settings_path.exists() {
-        let mut app_state = match state.0.lock() {
-            Ok(state) => state,
-            Err(e) => log_panic!("Failed to lock app state: {}", e),
-        };
-        let settings_raw_text = match fs::read_to_string(settings_path) {
-            Ok(text) => text,
-            Err(e) => log_panic!("Failed to read settings file: {}", e),
-        };
-        app_state.settings = match serde_json::from_str(settings_raw_text.as_str()) {
-            Ok(settings) => settings,
-            Err(e) => log_panic!("Failed to deserialize settings: {}", e),
-        };
-    }
-
-    settings_exist
-}
+const APP_NAME: &str = "sprite-packer";
 
 /// Get a collection by its name
 /// # Arguments
@@ -119,9 +66,29 @@ fn main() {
 /// Set up the application
 fn setup_app() {
     let app_state = AppState(Default::default());
-    let settings_exist = check_settings(&app_state);
-    if !settings_exist {
-        select_sprites_path(&app_state);
+    match confy::load::<Settings>(APP_NAME, None) { 
+        Ok(settings) => {
+            app_state.0.lock().expect("Failed to lock app_state").settings = settings.clone();
+            match confy::get_configuration_file_path(APP_NAME, None) {
+                Ok(settings_path) => {
+                    match settings_path.parent() {
+                        Some(settings_dir) => {
+                            let log_path = settings_dir.join(format!("{}.log", APP_NAME));
+                            match simple_logging::log_to_file(log_path.clone(), LevelFilter::Info) {
+                                Ok(_) => info!("Opened logger at: {}", log_path.display()),
+                                Err(e) => log_panic!("Failed to open logger: {}", e)
+                            }
+                        }
+                        None => log_panic!("Failed to get parent of settings path: {}", settings_path.display())
+                    }
+                }
+                Err(e) => log_panic!("Failed to get settings path: {}", e)
+            }
+            if settings.sprites_path == "".to_string() {
+                select_sprites_path(&app_state);
+            }
+        },
+        Err(e) => log_panic!("Failed to load settings: {}", e)
     }
     load_collections_and_animations(&app_state);
 
@@ -163,11 +130,9 @@ fn setup_app() {
             cancel_pack,
             debug,
             get_animation,
-            get_animation_name_from_clip_name,
             get_animation_name_from_collection_name,
             get_animation_list,
             get_collections_from_animation_name,
-            get_clip_name_from_frame_name,
             get_language,
             get_sprites_path,
             pack_single_collection,
@@ -181,46 +146,8 @@ fn setup_app() {
             api.prevent_exit();
 
             let state = app_handle.state::<AppState>();
-            let app_state = match state.0.lock() {
-                Ok(state) => state,
-                Err(e) => log_panic!("Failed to lock app state: {}", e),
-            };
-            let settings = app_state.settings.clone();
-            let base_dir = BaseDirs::new().unwrap();
-            let settings_dir: PathBuf = [base_dir.data_dir().to_str().unwrap(), SETTINGS_FOLDER]
-                .iter()
-                .collect();
-            if !settings_dir.exists() {
-                match fs::create_dir(settings_dir.as_path()) {
-                    Ok(_) => info!("Succesfully created settings folder."),
-                    Err(e) => log_panic!("Failed to create settings folder: {}", e),
-                }
-            }
-            let settings_path = settings_dir.join("Settings.json");
-            // Save or create a settings file
-            if settings_path.exists() {
-                let settings_file = File::options()
-                    .write(true)
-                    .open(settings_path.as_path())
-                    .unwrap();
-                match serde_json::to_writer_pretty(settings_file, &settings) {
-                    Ok(_) => info!("Successfully saved settings."),
-                    Err(e) => log_panic!("Failed to save settings: {}", e),
-                }
-            } else {
-                let mut settings_file = match File::create(settings_path.as_path()) {
-                    Ok(file) => file,
-                    Err(e) => log_panic!("Failed to create settings file: {}", e),
-                };
-                let settings_string = match serde_json::to_string(&app_state.settings) {
-                    Ok(settings) => settings,
-                    Err(e) => log_panic!("Failed to serialize settings: {}", e),
-                };
-                match settings_file.write_all(settings_string.as_bytes()) {
-                    Ok(_) => info!("Successfully created new settings file."),
-                    Err(e) => log_panic!("Failed to create new settings file: {}", e),
-                }
-            }
+            let settings = state.0.lock().expect("Failed to lock app_state").settings.clone();
+            confy::store(APP_NAME, None, settings).expect("Failed to save settings");
 
             app_handle.exit(0);
         }
@@ -517,6 +444,10 @@ async fn pack_collection(
         ControlFlow::Continue(())
     });
 
+    if *running_task.lock().expect("Failed to lock running_task") == false {
+        return;
+    }
+
     let stop = Instant::now();
     info!("Time to pack collection {:?}: {} ms", collection.name, stop.duration_since(start).as_millis());
 
@@ -632,31 +563,6 @@ fn get_collections_from_animation_name(animation_name: String, state: State<AppS
     return collections;
 }
 
-/// Get a clip's name from a frame's name
-/// # Arguments
-/// * `frame_name` - The name of the frame
-/// * `state` - The application state
-/// # Returns
-/// * `String` - The name of the clip
-#[command]
-fn get_clip_name_from_frame_name(frame_name: String, state: State<AppState>) -> String {
-    let app_state = match state.0.lock() {
-        Ok(state) => state,
-        Err(e) => log_panic!("Failed to lock app state: {}", e),
-    };
-
-    let clip_index = frame_name[0..3].to_string();
-
-    let clip = match app_state.loaded_animations.par_iter().find_map_first(|anim| {
-        anim.clips.par_iter().find_first(|clip| clip.name.starts_with(&clip_index))
-    }) {
-        Some(clip) => clip.clone(),
-        None => log_panic!("Failed to find clip with index: {}", clip_index),
-    };
-    
-    clip.name
-}
-
 /// Get an animation by its name
 /// # Arguments
 /// * `animation_name` - The name of the animation
@@ -677,33 +583,6 @@ fn get_animation(animation_name: String, state: State<AppState>) -> Animation {
         Some(animation) => animation.clone(),
         None => log_panic!("Failed to find animation with name: {}", animation_name),
     }
-}
-
-/// Get an animation's name from a clip's name
-/// # Arguments
-/// * `clip_name` - The name of the clip
-/// * `state` - The application state
-/// # Returns
-/// * `String` - The name of the animation
-#[command]
-fn get_animation_name_from_clip_name(clip_name: String, state: State<AppState>) -> String {
-    let app_state = match state.0.lock() {
-        Ok(state) => state,
-        Err(e) => log_panic!("Failed to lock app state: {}", e),
-    };
-    let animation = match app_state
-        .loaded_animations
-        .par_iter()
-        .find_first(|anim| match anim.clips.par_iter().find_first(|clip| clip.name == clip_name) {
-            Some(_) => true,
-            None => false,
-        })
-    {
-        Some(anim) => anim,
-        None => log_panic!("Failed to find animation from clip name {:?}", clip_name),
-    };
-    
-    return animation.name.clone();
 }
 
 /// Get an animation's name from a collection's name
