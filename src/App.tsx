@@ -275,7 +275,7 @@ export default class App extends Component<{}, AppState> {
         })
       })
 
-    invoke("get_collections_from_animation_name", { animationName: animationName })
+    invoke("get_collections_from_animation_name", { animationName })
       .then(collections => {
         const clns = collections as Collection[]
         this.setState({ currentCollections: clns })
@@ -317,7 +317,7 @@ export default class App extends Component<{}, AppState> {
 
       invoke("get_animation_name_from_collection_name", { collectionName: this.state.currentCollection?.name as string })
         .then(animationName => {
-          invoke("get_animation", { animationName: animationName })
+          invoke("get_animation", { animationName })
             .then(animation => {
               const anim = animation as Animation
               const clip = anim.clips.find(clip => clip.frames.find(frame => frame.name == frameName)) as Clip

@@ -4,15 +4,15 @@
 )]
 
 mod app;
-mod tk2d;
 mod macros;
+mod tk2d;
 
-use crate::app::app::App;
-use crate::tk2d::clip::Clip;
-use crate::tk2d::cln::Collection;
-use crate::tk2d::info::{AnimInfo, SpriteInfo};
-use crate::tk2d::anim::*;
+use app::app::App;
 use app::settings::Settings;
+use tk2d::anim::*;
+use tk2d::clip::Clip;
+use tk2d::cln::Collection;
+use tk2d::info::{AnimInfo, SpriteInfo};
 use image::{DynamicImage, GenericImage, GenericImageView};
 use log::{error, info, LevelFilter, warn};
 use rayon::prelude::*;
@@ -107,18 +107,8 @@ fn setup_app() {
         .manage(app_state)
         .menu(menu)
         .on_menu_event(|event| match event.menu_item_id() {
-            "quit" => {
-                match event.window().close() {
-                    Ok(_) => info!("Successfully closed window from Options menu"),
-                    Err(e) => log_panic!("Failed to close window from Options menu: {}", e),
-                }
-            }
-            "refresh" => {
-                match event.window().emit("refresh", ()) {
-                    Ok(_) => info!("Successfully emitted refresh event from Options menu"),
-                    Err(e) => log_panic!("Failed to emit refresh event: {}", e),
-                }
-            }
+            "quit" => event.window().close().expect("Failed to close window from Options menu"),
+            "refresh" => event.window().emit("refresh", ()).expect("Failed to emit refresh event"),
             "set_sprites_path" => {
                 let app_handle = event.window().app_handle();
                 let state = app_handle.state::<AppState>();
@@ -144,7 +134,7 @@ fn setup_app() {
     app.run(move |app_handle, event| match event {
         ExitRequested { api, .. } => {
             api.prevent_exit();
-
+            
             let state = app_handle.state::<AppState>();
             let settings = state.0.lock().expect("Failed to lock app_state").settings.clone();
             confy::store(APP_NAME, None, settings).expect("Failed to save settings");
@@ -159,10 +149,7 @@ fn setup_app() {
 /// # Arguments
 /// * `state` - The application state
 fn load_collections_and_animations(state: &AppState) {
-    let mut app_state = match state.0.lock() {
-        Ok(state) => state,
-        Err(e) => log_panic!("Failed to lock app state: {}", e),
-    };
+    let mut app_state = state.0.lock().expect("Failed to lock app state");
     match fs::read_dir(app_state.settings.sprites_path.clone()) {
         Ok(anim_paths) => {
             for anim_path in anim_paths {
@@ -180,14 +167,13 @@ fn load_collections_and_animations(state: &AppState) {
                                 for i in 0..sprite_info.id.len() {
                                     match sprite_info.at(i) {
                                         Some(sprite) => {
-                                            match app_state.loaded_collections.par_iter().find_first(|cln| cln.name == sprite.collection_name) {
-                                                Some(cln) => {
-                                                    let mut cln = cln.clone();
-                                                    let sprite = sprite.clone();
-                                                    cln.sprites.push(sprite.clone());
-                                                    (*app_state).loaded_collections.retain(|cln| cln.name != sprite.collection_name);
-                                                    (*app_state).loaded_collections.push(cln);
-                                                },
+                                            match app_state.loaded_collections.iter().find(|cln| cln.name == sprite.collection_name) {
+                                                Some(collection) => {
+                                                    let mut collection = collection.clone();
+                                                    collection.sprites.push(sprite.clone());
+                                                    app_state.loaded_collections.retain(|cln| cln.name != collection.name);
+                                                    app_state.loaded_collections.push(collection);
+                                                }
                                                 None => {
                                                     let collection_name = sprite.clone().collection_name;
                                                     let mut cln = Collection {
@@ -196,10 +182,10 @@ fn load_collections_and_animations(state: &AppState) {
                                                         sprites: Vec::new(),
                                                     };
                                                     cln.sprites.push(sprite);
-                                                    (*app_state).loaded_collections.push(cln);
+                                                    app_state.loaded_collections.push(cln);
                                                 }
                                             }
-                                        },
+                                        }
                                         None => log_panic!("Failed to get sprite at index {}.", i),
                                     }
                                 }
@@ -324,7 +310,7 @@ fn load_collections_and_animations(state: &AppState) {
 
                                 clips.par_sort();
 
-                                (*app_state).loaded_animations.push(Animation {
+                                app_state.loaded_animations.push(Animation {
                                     name: animation_name.to_string(),
                                     clips,
                                 });
@@ -339,8 +325,8 @@ fn load_collections_and_animations(state: &AppState) {
         Err(e) => log_panic!("Failed to read directory: {}", e),
     }
 
-    (*app_state).loaded_collections.par_sort();
-    (*app_state).loaded_animations.par_sort();
+    app_state.loaded_collections.par_sort();
+    app_state.loaded_animations.par_sort();
 }
 
 /// Packs a collection of sprites into an atlas
@@ -429,10 +415,8 @@ async fn pack_collection(
         match sprite_num.lock() {
             Ok(mut num) => {
                 *num += 1;
-                match window.emit("progress", ProgressPayload { progress: *num * 100 / collection.sprites.len() }) {
-                    Ok(_) => info!("Emitted progress event. Progress value: {}", *num * 100 / collection.sprites.len()),
-                    Err(e) => log_panic!("Failed to emit progress event: {}", e),
-                }
+                window.emit("progress", ProgressPayload { progress: *num * 100 / collection.sprites.len() })
+                    .expect("Failed to emit progress event");
             }
             Err(e) => log_panic!("Failed to lock sprite_num: {}", e),
         }
@@ -456,35 +440,19 @@ async fn pack_collection(
         .set_file_name(format!("{}.png", collection.name.clone()).as_str())
         .add_filter("PNG Image", &["png"])
         .save_file() {
-            Some(atlas_path) => {
-                match gen_atlas.lock() {
-                    Ok(atlas) => {
-                        match atlas.save(atlas_path.clone()) {
-                            Ok(_) => info!("Generated atlas saved to {:?}", atlas_path.display()),
-                            Err(e) => log_panic!("Failed to save atlas: {}", e),
-                        }
-                    }
-                    Err(e) => log_panic!("Failed to lock generated atlas: {}", e),
-                }
-            }
+            Some(atlas_path) => gen_atlas.lock().expect("Failed to lock generated atlas")
+                .save(atlas_path.clone()).expect("Failed to save atlas."),
             None => warn!("Generated atlas not saved.")
         }
 
-    match window.emit("enablePack", ()) {
-        Ok(_) => info!("Emitted enablePack event."),
-        Err(e) => log_panic!("Failed to emit enablePack event: {}", e),
-    }
+    window.emit("enablePack", ()).expect("Failed to emit enablePack event");
 }
 
 /// Select folder containing animation files
 /// # Arguments
 /// * `state` - The application state
 fn select_sprites_path(state: &AppState) {
-    let mut app_state = match state.0.lock() {
-        Ok(state) => state,
-        Err(e) => log_panic!("Failed to lock app state: {}", e),
-    };
-
+    let mut app_state = state.0.lock().expect("Failed to lock app state");
     app_state.settings.sprites_path = "".to_string();
     while app_state.settings.sprites_path == "".to_string() {
         match FileDialogBuilder::new()
@@ -507,17 +475,9 @@ fn select_sprites_path(state: &AppState) {
 #[command]
 fn cancel_pack() {
     unsafe {
-        match &TX.lock() {
-            Ok(tx) => match tx.as_ref() {
-                Some(tx) => {
-                    match tx.send(()) {
-                        Ok(_) => info!("Sent cancel pack signal."),
-                        Err(e) => log_panic!("Failed to send cancel pack signal: {}", e),
-                    }
-                }
-                None => warn!("No cancel signal sent."),
-            }
-            Err(e) => log_panic!("Failed to lock tx: {}", e)
+        match &TX.lock().expect("Failed to lock tx").as_ref() {
+            Some(tx) => tx.send(()).expect("Failed to send cancel pack signal."),
+            None => warn!("No cancel signal sent."),
         }
     }
 }
@@ -551,10 +511,7 @@ fn get_collections_from_animation_name(animation_name: String, state: State<AppS
         .collect::<Vec<String>>();
     collection_names.par_sort();
     collection_names.dedup();
-    let app_state = match state.0.lock() {
-        Ok(state) => state,
-        Err(e) => log_panic!("Failed to lock app state: {}", e),
-    };
+    let app_state = state.0.lock().expect("Failed to lock app state");
     let collections = collection_names
         .par_iter()
         .map(|collection_name| get_collection(collection_name.clone(), app_state.loaded_collections.clone()))
@@ -571,10 +528,7 @@ fn get_collections_from_animation_name(animation_name: String, state: State<AppS
 /// * `Animation` - The returned animation
 #[command]
 fn get_animation(animation_name: String, state: State<AppState>) -> Animation {
-    let app_state = match state.0.lock() {
-        Ok(state) => state,
-        Err(e) => log_panic!("Failed to lock app state: {}", e),
-    };
+    let app_state = state.0.lock().expect("Failed to lock app state");
     match app_state
         .loaded_animations
         .par_iter()
@@ -593,10 +547,7 @@ fn get_animation(animation_name: String, state: State<AppState>) -> Animation {
 /// * `String` - The returned name of the animation
 #[command]
 fn get_animation_name_from_collection_name(collection_name: String, state: State<AppState>) -> String {
-    let app_state = match state.0.lock() {
-        Ok(state) => state,
-        Err(e) => log_panic!("Failed to lock app state: {}", e),
-    };
+    let app_state = state.0.lock().expect("Failed to lock app state");
     let animation = match app_state.loaded_animations.par_iter().find_map_first(|anim| {
         anim.clips.par_iter().find_map_first(|clip| {
             clip.frames.par_iter().find_map_first(|frame| {
@@ -622,10 +573,7 @@ fn get_animation_name_from_collection_name(collection_name: String, state: State
 /// * `Vec<String>` - The returned list of animation names
 #[command]
 fn get_animation_list(state: State<AppState>) -> Vec<String> {
-    let app_state = match state.0.lock() {
-        Ok(state) => state,
-        Err(e) => log_panic!("Failed to lock app state: {}", e),
-    };
+    let app_state = state.0.lock().expect("Failed to lock app state");
     let animation_list = Mutex::new(Vec::new());
     let _ = &app_state.loaded_animations.par_iter().for_each(|animation| {
         match animation_list.lock() {
@@ -647,10 +595,7 @@ fn get_animation_list(state: State<AppState>) -> Vec<String> {
 /// * `String` - The returned language
 #[command]
 fn get_language(state: State<AppState>) -> String {
-    let app_state = match state.0.lock() {
-        Ok(state) => state,
-        Err(e) => log_panic!("Failed to lock app state: {}", e),
-    };
+    let app_state = state.0.lock().expect("Failed to lock app state");
     app_state.settings.language.clone()
 }
 
@@ -661,10 +606,7 @@ fn get_language(state: State<AppState>) -> String {
 /// * `String` - The returned path to the sprites folder
 #[command]
 fn get_sprites_path(state: State<AppState>) -> String {
-    let app_state = match state.0.lock() {
-        Ok(state) => state,
-        Err(e) => log_panic!("Failed to lock app state: {}", e),
-    };
+    let app_state = state.0.lock().expect("Failed to lock app state");
     app_state.settings.sprites_path.clone()
 }
 
@@ -675,10 +617,7 @@ fn get_sprites_path(state: State<AppState>) -> String {
 /// * `state` - The application state
 #[command]
 fn pack_single_collection(collection_name: String, app_handle: AppHandle, state: State<AppState>) {
-    let app_state = match state.0.lock() {
-        Ok(state) => state,
-        Err(e) => log_panic!("Failed to lock app state: {}", e),
-    };
+    let app_state = state.0.lock().expect("Failed to lock app state");
     let collection = get_collection(collection_name.clone(), app_state.loaded_collections.clone());
     let window = match app_handle.get_window("main") {
         Some(window) => window,
@@ -697,11 +636,7 @@ fn pack_single_collection(collection_name: String, app_handle: AppHandle, state:
 
 #[command]
 fn set_language(language: String, menu_items: Vec<String>, app_handle: AppHandle, state: State<AppState>) {
-    let mut app_state = match state.0.lock() {
-        Ok(state) => state,
-        Err(e) => log_panic!("Failed to lock app state: {}", e),
-    };
-
+    let mut app_state = state.0.lock().expect("Failed to lock app state");
     let menu_handle = match app_handle.get_window("main") {
         Some(window) => window.menu_handle(),
         None => log_panic!("Failed to get main window"),
@@ -709,24 +644,15 @@ fn set_language(language: String, menu_items: Vec<String>, app_handle: AppHandle
 
     let mut i = 0;
 
-    match menu_handle.get_item("quit").set_title(menu_items[i].clone()) {
-        Ok(_) => info!("Quit label is now {}", menu_items[i].clone()),
-        Err(e) => log_panic!("Failed to set title of Quit menu to {}: {}", menu_items[i].clone(), e),
-    }
+    menu_handle.get_item("quit").set_title(menu_items[i].clone()).expect("Failed to set title of Quit menu.");
 
     i += 1;
 
-    match menu_handle.get_item("refresh").set_title(menu_items[i].clone()) {
-        Ok(_) => info!("Refresh label is now {}", menu_items[i].clone()),
-        Err(e) => log_panic!("Failed to set title of Refresh menu to {}: {}", menu_items[i].clone(), e),
-    }
+    menu_handle.get_item("refresh").set_title(menu_items[i].clone()).expect("Failed to set title of Refresh menu.");
 
     i += 1;
     
-    match menu_handle.get_item("set_sprites_path").set_title(menu_items[i].clone()) {
-        Ok(_) => info!("Set Sprites Path label is now {}", menu_items[i].clone()),
-        Err(e) => log_panic!("Failed to set title of Set Sprites Path menu to {}: {}", menu_items[i].clone(), e),
-    }
+    menu_handle.get_item("set_sprites_path").set_title(menu_items[i].clone()).expect("Failed to set title of Set Sprites Path menu.");
         
     app_state.settings.language = language;
 }

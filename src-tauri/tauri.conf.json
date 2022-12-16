@@ -56,7 +56,12 @@
       "csp": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'src' asset: https://asset.localhost"
     },
     "updater": {
-      "active": false
+      "active": true,
+      "dialog": true,
+      "endpoints": [
+        "https://gist.githubusercontent.com/jngo102/53bc6d1205405e6ee4070d320281b851/raw/4ceea0aafe6b8ba3cfc92ca823e69f90944be1da/sprite-packer-updater-gist.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEMzOUYwRTYxRTMwNUFDMzMKUldRenJBWGpZUTZmdzdmekxWK29HQzc5Mi92QnBOSndXYXhSM3lOU2lwajZSRHVtdGtFK1RpS1IK"
     },
     "windows": [
       {
