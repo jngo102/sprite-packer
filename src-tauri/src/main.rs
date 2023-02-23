@@ -129,7 +129,7 @@ fn replace_duplicate_sprites(source_sprite: Sprite, state: State<AppState>) {
                                                     for path in sprite_paths {
                                                         match path {
                                                             Ok(sprite_path) => {
-                                                                if (sprite_path.path().extension().unwrap() != "png") {
+                                                                if sprite_path.path().extension().unwrap() != "png" {
                                                                     continue;
                                                                 }
 
@@ -274,9 +274,11 @@ fn setup_app() {
             get_collections_from_animation_name,
             get_language,
             get_sprites_path,
+            get_mode,
             pack_single_collection,
             replace_duplicate_sprites,
-            set_language
+            set_language,
+            set_mode
         ])
         .build(tauri::generate_context!())
         .expect("Failed to build tauri application.");
@@ -915,6 +917,12 @@ fn get_sprites_path(state: State<AppState>) -> String {
     app_state.settings.sprites_path.clone()
 }
 
+#[command]
+fn get_mode(state: State<AppState>) -> String {
+    let app_state = state.0.lock().expect("Failed to lock app state");
+    app_state.settings.mode.clone()
+}
+
 /// Pack a single collection
 /// # Arguments
 /// * `collection_name` - The name of the collection
@@ -960,4 +968,11 @@ fn set_language(language: String, menu_items: Vec<String>, app_handle: AppHandle
     menu_handle.get_item("set_sprites_path").set_title(menu_items[i].clone()).expect("Failed to set title of Set Sprites Path menu.");
         
     app_state.settings.language = language;
+}
+
+#[command]
+fn set_mode(mode: String, state: State<AppState>) {
+    let mut app_state = state.0.lock().expect("Failed to lock app state");
+    app_state.settings.mode = mode.clone();
+    info!("Mode set to {}", mode);
 }

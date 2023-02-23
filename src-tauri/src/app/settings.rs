@@ -6,8 +6,8 @@ pub struct Settings {
     pub language: String,
     #[serde(rename = "Sprites Path")]
     pub sprites_path: String,
-    #[serde(rename = "Theme")]
-    pub theme: String,
+    #[serde(rename = "Mode")]
+    pub mode: String,
 }
 
 impl Default for Settings {
@@ -15,7 +15,7 @@ impl Default for Settings {
         Self {
             language: "en".to_string(),
             sprites_path: String::new(),
-            theme: "Dark".to_string(),
+            mode: "dark".to_string(),
         }
     }
 }

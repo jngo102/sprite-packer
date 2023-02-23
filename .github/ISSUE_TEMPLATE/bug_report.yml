@@ -49,10 +49,10 @@ body:
       attributes:
           label: Log content
           description: |
-              Copy and paste all of the contents from the log file located in the SpritePacker data directory.
-              For Windows, this is at `%APPDATA%/SpritePacker/SpritePacker.log` | `C:/Users/{userName}/AppData/Roaming/SpritePacker/SpritePacker.log`.
-              For macOS, this is at `$HOME/Library/Application Support/SpritePacker/SpritePacker.log` | `/Users/{userName}/Library/Application Support/SpritePacker/SpritePacker.log`.
-              For Linux, this is `$HOME/.local/share/SpritePacker/SpritePacker.log` | `/home/{userName}/.local/share/SpritePacker/SpritePacker.log`."
+              Copy and paste all of the contents from the log file located in the sprite-packer data directory.
+              For Windows, this is at `%APPDATA%/sprite-packer/config/sprite-packer.log` | `C:/Users/{userName}/AppData/Roaming/sprite-packer/config/sprite-packer.log`.
+              For macOS, this is at `$HOME/Library/Application Support/sprite-packer/config/sprite-packer.log` | `/Users/{userName}/Library/Application Support/sprite-packer/config/sprite-packer.log`.
+              For Linux, this is `$HOME/.local/share/sprite-packer/config/sprite-packer.log` | `/home/{userName}/.local/share/sprite-packer/config/sprite-packer.log`."
           render: shell
     
     - type: textarea

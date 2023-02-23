@@ -1,27 +1,33 @@
-import { Component } from 'react'
+import * as React from 'react'
 import { convertFileSrc, invoke } from '@tauri-apps/api/tauri'
 import { appWindow } from '@tauri-apps/api/window'
 import LabeledLinearProgress from './components/LabeledLinearProgress'
 import SelectableList from './components/SelectableList'
-import { Grid, MenuItem, Select } from '@mui/material'
+import { AppBar, Grid, MenuItem, PaletteMode, Select, Switch } from '@mui/material'
+import CssBaseline from '@mui/material/CssBaseline'
+import WbSunnyIconSharp from '@mui/icons-material/WbSunnySharp'
+import ModeNightIconSharp from '@mui/icons-material/ModeNightSharp'
+import { createTheme, Theme, ThemeProvider } from '@mui/material/styles'
 import { Clip, Collection, InspectMode, Animation, ProgressPayload, Sprite } from './data/classes'
 import { i18n, languages } from './data/i18n'
 
 interface AppState {
   animationNames: string[]
   changedSprites: Sprite[]
+  currentAnimation: Animation | null
   currentClip: Clip | null
   currentCollection: Collection | null
   currentCollections: Collection[]
-  currentAnimation: Animation | null
   currentFrame: Sprite | null
+  mode: string,
   duplicateSprites: string[]
   inspectMode: InspectMode
   isPacking: boolean
   packProgress: number
+  theme: Theme
 }
 
-export default class App extends Component<{}, AppState> {
+export default class App extends React.Component<{}, AppState> {
   canvas: HTMLCanvasElement | null
   canvasContext: CanvasRenderingContext2D | null
   frameCache: HTMLImageElement[]
@@ -36,15 +42,21 @@ export default class App extends Component<{}, AppState> {
     this.state = {
       animationNames: [],
       changedSprites: [],
+      currentAnimation: null,
       currentClip: null,
       currentCollection: null,
       currentCollections: [],
-      currentAnimation: null,
       currentFrame: null,
+      mode: "dark",
       duplicateSprites: [],
       inspectMode: InspectMode.Animation,
       isPacking: false,
       packProgress: 0,
+      theme: createTheme({
+        palette: {
+          mode: "dark" as PaletteMode,
+        }
+      }),
     }
 
     this.canvas = null
@@ -57,6 +69,7 @@ export default class App extends Component<{}, AppState> {
     this.spritesPath = ""
 
     this.cancelPack = this.cancelPack.bind(this)
+    this.changeMode = this.changeMode.bind(this)
     this.checkForChangedSprites = this.checkForChangedSprites.bind(this)
     this.draw = this.draw.bind(this)
     this.findDuplicates = this.findDuplicates.bind(this)
@@ -70,6 +83,7 @@ export default class App extends Component<{}, AppState> {
     this.setCurrentFrame = this.setCurrentFrame.bind(this)
     this.setCurrentSprite = this.setCurrentSprite.bind(this)
     this.setLanguage = this.setLanguage.bind(this)
+    this.setMode = this.setMode.bind(this)
     this.update = this.update.bind(this)
   }
 
@@ -93,6 +107,16 @@ export default class App extends Component<{}, AppState> {
         this.languages.push(lang)
       }
     })
+    await invoke("get_mode").then(mode => {
+      this.setState({ mode: mode as string }, () => {
+        this.setState({ theme: createTheme({
+            palette: {
+              mode: this.state.mode as PaletteMode,
+            }
+          }),
+        })
+      })
+    })
     await invoke("get_animation_list").then(animationList => {
       this.setState({ animationNames: animationList as string[] }, () => {
         if (this.state.animationNames.length > 0) {
@@ -113,97 +137,112 @@ export default class App extends Component<{}, AppState> {
 
   render() {
     return (
-      <Grid container columns={{ xs: 7 }}>
-        <Grid container item>
-          <SelectableList items={this.state.animationNames}
-            onSelectItem={this.setCurrentAnimation}
-            selectedItem={this.state.currentAnimation?.name as string}
-            title={i18n.animations} />
-          <SelectableList items={this.state.currentAnimation?.clips.map(clip => clip.name) as string[]}
-            onSelectItem={this.setCurrentClip}
-            selectedItem={this.state.currentClip?.name as string}
-            title={i18n.clips} />
-          <SelectableList items={this.state.inspectMode == InspectMode.Collection
-            ? this.state.currentCollection?.sprites.map(sprite => sprite.name) as string[]
-            : this.state.currentClip?.frames.map(frame => frame.name) as string[]}
-            onSelectItem={this.setCurrentFrame}
-            selectedItem={this.state.currentFrame?.name as string}
-            title={i18n.frames} />
-          <Grid container item xs={2}>
-            <Grid item>
-              <canvas id="clip-preview" style={{ maxWidth: "100%", maxHeight: "100%" }} />
-            </Grid>
-            <SelectableList items={this.state.currentCollections?.map(cln => cln.name) as string[]}
-              onSelectItem={this.setCurrentCollection}
-              selectedItem={this.state.currentCollection?.name as string}
-              title={i18n.atlases} />
-          </Grid>
-          <Grid container item xs={2}>
-            <SelectableList items={this.state.duplicateSprites}
-              onSelectItem={this.setCurrentBackup}
-              selectedItem={this.state.currentFrame?.name as string}
-              title={i18n.duplicates} />
-            <Grid item>
-              <button id="find-duplicates-button" onClick={this.findDuplicates}>
-                {i18n.findDuplicates}
-              </button>
-            </Grid>
-          </Grid>
-          <Grid container item xs={2}>
-            <SelectableList items={this.state.changedSprites.map(sprite => sprite.name) as string[]}
-              onSelectItem={this.setCurrentSprite}
-              selectedItem={this.state.currentFrame?.name as string}
-              title={i18n.changedSprites} />
-            <Grid item>
-              <button id="restore-button" onClick={this.replaceDuplicates}>
-                {i18n.replaceDuplicates}
-              </button>
-            </Grid>
-          </Grid>
-        </Grid>
-        <Grid alignItems="stretch" container item xs={12}>
-          <button hidden={this.state.isPacking || this.state.inspectMode != InspectMode.Collection}
-            id="pack-button"
-            style={{ padding: "16 16 8 8", width: "100%" }}
-            onClick={this.packCollection}>
-            {i18n.pack}
-          </button>
+      <ThemeProvider theme={this.state.theme}>
+        <CssBaseline enableColorScheme />
+        <Grid container columns={{ xs: 7 }}>
+          <AppBar position="sticky">
+            <span>
+              <WbSunnyIconSharp />
+              <Switch onChange={this.changeMode}
+                checked={this.state.mode == "dark"} />
+              <ModeNightIconSharp />
+            </span>
+          </AppBar>
           <Grid container item>
-            <LabeledLinearProgress hidden={!this.state.isPacking}
-              id="pack-progress-bar"
-              text={`${i18n.packing}${this.state.currentCollection?.name as string}`}
-              value={this.state.packProgress} />
-            <Grid item xs={2}>
-              <button hidden={!this.state.isPacking}
-                id="cancel-pack-button"
-                onClick={this.cancelPack}>
-                {i18n.cancel}
-              </button>
+            <SelectableList items={this.state.animationNames}
+              onSelectItem={this.setCurrentAnimation}
+              selectedItem={this.state.currentAnimation?.name as string}
+              title={i18n.animations} />
+            <SelectableList items={this.state.currentAnimation?.clips.map(clip => clip.name) as string[]}
+              onSelectItem={this.setCurrentClip}
+              selectedItem={this.state.currentClip?.name as string}
+              title={i18n.clips} />
+            <SelectableList items={this.state.inspectMode == InspectMode.Collection
+              ? this.state.currentCollection?.sprites.map(sprite => sprite.name) as string[]
+              : this.state.currentClip?.frames.map(frame => frame.name) as string[]}
+              onSelectItem={this.setCurrentFrame}
+              selectedItem={this.state.currentFrame?.name as string}
+              title={i18n.frames} />
+            <Grid container item xs={2}>
+              <Grid item>
+                <canvas id="clip-preview" style={{ maxWidth: "100%", maxHeight: "100%" }} />
+              </Grid>
+              <SelectableList items={this.state.currentCollections?.map(cln => cln.name) as string[]}
+                onSelectItem={this.setCurrentCollection}
+                selectedItem={this.state.currentCollection?.name as string}
+                title={i18n.atlases} />
+            </Grid>
+            <Grid container item xs={2}>
+              <SelectableList items={this.state.duplicateSprites}
+                onSelectItem={this.setCurrentBackup}
+                selectedItem={this.state.currentFrame?.name as string}
+                title={i18n.duplicates} />
+              <Grid item>
+                <button id="find-duplicates-button" onClick={this.findDuplicates}>
+                  {i18n.findDuplicates}
+                </button>
+              </Grid>
+            </Grid>
+            <Grid container item xs={2}>
+              <SelectableList items={this.state.changedSprites.map(sprite => sprite.name) as string[]}
+                onSelectItem={this.setCurrentSprite}
+                selectedItem={this.state.currentFrame?.name as string}
+                title={i18n.changedSprites} />
+              <Grid item>
+                <button id="restore-button" onClick={this.replaceDuplicates}>
+                  {i18n.replaceDuplicates}
+                </button>
+              </Grid>
             </Grid>
           </Grid>
+          <Grid alignItems="stretch" container item xs={12}>
+            <button hidden={this.state.isPacking || this.state.inspectMode != InspectMode.Collection}
+              id="pack-button"
+              style={{ padding: "16 16 8 8", width: "100%" }}
+              onClick={this.packCollection}>
+              {i18n.pack}
+            </button>
+            <Grid container item>
+              <LabeledLinearProgress hidden={!this.state.isPacking}
+                id="pack-progress-bar"
+                text={`${i18n.packing}${this.state.currentCollection?.name as string}`}
+                value={this.state.packProgress} />
+              <Grid item xs={2}>
+                <button hidden={!this.state.isPacking}
+                  id="cancel-pack-button"
+                  onClick={this.cancelPack}>
+                  {i18n.cancel}
+                </button>
+              </Grid>
+            </Grid>
+          </Grid>
+          <Grid container item>
+            <Select
+              id="language-select"
+              label={i18n.language}
+              value={i18n.getLanguage()}>
+              {this.languages.map(lang => {
+                return <MenuItem className="language-item"
+                  key={lang}
+                  onClick={() => this.setLanguage(lang)}
+                  value={lang}>
+                  {lang}
+                </MenuItem>
+              })}
+            </Select>
+          </Grid>
         </Grid>
-        <Grid container item>
-          <Select
-            id="language-select"
-            label={i18n.language}
-            value={i18n.getLanguage()}>
-            {this.languages.map(lang => {
-              return <MenuItem className="language-item"
-                key={lang}
-                onClick={() => this.setLanguage(lang)}
-                value={lang}>
-                {lang}
-              </MenuItem>
-            })}
-          </Select>
-        </Grid>
-      </Grid>
+      </ThemeProvider>
     )
   }
 
   cancelPack() {
     this.setState({ isPacking: false })
     invoke("cancel_pack")
+  }
+
+  changeMode(event: React.ChangeEvent<HTMLInputElement>) {
+    this.setMode(event.target.checked ? "dark" : "light")
   }
 
   checkForChangedSprites() {
@@ -389,7 +428,6 @@ export default class App extends Component<{}, AppState> {
 
   setCurrentSprite(spriteName: string) {
     invoke("get_collection_from_sprite_name", { spriteName }).then(collection => {
-      invoke("debug", { msg: "Collection name: " + (collection as Collection).name })
       this.setState({ currentCollection: collection as Collection, inspectMode: InspectMode.Collection }, () => {
         this.setCurrentFrame(spriteName)
       })
@@ -399,6 +437,19 @@ export default class App extends Component<{}, AppState> {
   setLanguage(language: string) {
     i18n.setLanguage(language)
     invoke("set_language", { language: i18n.getLanguage(), menuItems: [i18n.quit, i18n.refresh, i18n.setSpritesPath] })
+  }
+
+  setMode(mode: string) {
+    this.setState({ mode }, () => {
+      invoke("set_mode", { mode })
+      this.setState({
+        theme: createTheme({
+          palette: {
+            mode: mode as PaletteMode,
+          }
+        }),
+      })
+    })
   }
 
   update() {

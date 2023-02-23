@@ -95,3 +95,8 @@ export class ProgressPayload {
         this.progress = progress
     }
 }
+
+export enum Theme {
+    Dark,
+    Light,
+}

@@ -8,11 +8,13 @@
   },
   "package": {
     "productName": "sprite-packer",
-    "version": "0.1.2"
+    "version": "0.1.1"
   },
   "tauri": {
     "allowlist": {
+      "all": false,
       "protocol": {
+        "all": false,
         "asset": true,
         "assetScope": ["**"]
       }
@@ -51,7 +53,7 @@
       }
     },
     "security": {
-      "csp": "default-src 'self'; img-src 'self' asset: https://asset.localhost"
+      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: https://asset.localhost"
     },
     "updater": {
       "active": true,
