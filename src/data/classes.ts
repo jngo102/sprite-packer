@@ -33,8 +33,9 @@ export class Collection {
 }
 
 export enum InspectMode {
-    Collection,
     Animation,
+    Backup,
+    Collection,
 }
 
 export class Animation {

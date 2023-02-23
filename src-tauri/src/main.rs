@@ -6,15 +6,20 @@
 mod app;
 mod macros;
 mod tk2d;
+mod util;
 
 use app::app::App;
 use app::settings::Settings;
+use notify::event::ModifyKind;
 use tk2d::anim::*;
 use tk2d::clip::Clip;
 use tk2d::cln::Collection;
 use tk2d::info::{AnimInfo, SpriteInfo};
+use tk2d::sprite::Sprite;
+use util::fs as fs_util;
 use image::{DynamicImage, GenericImage, GenericImageView};
 use log::{error, info, LevelFilter, warn};
+use notify::{EventKind, RecursiveMode, Watcher};
 use rayon::prelude::*;
 use serde::Serialize;
 use simple_logging;
@@ -22,7 +27,7 @@ use std::cmp;
 use std::env;
 use std::fs;
 use std::ops::ControlFlow;
-use std::path::PathBuf;
+use std::path::{PathBuf, Path};
 use std::str::FromStr;
 use std::sync::Mutex;
 use std::sync::mpsc::{Receiver, self, Sender};
@@ -40,11 +45,127 @@ struct ProgressPayload {
 
 struct AppState(Mutex<App>);
 
-static mut TX: Mutex<Option<Sender<()>>> = Mutex::new(None);
-static mut RX: Mutex<Option<Receiver<()>>> = Mutex::new(None);
+static mut CHANGED_SPRITES: Mutex<Vec<Sprite>> = Mutex::new(Vec::new());
+static mut TX_PROGRESS: Mutex<Option<Sender<()>>> = Mutex::new(None);
+static mut RX_PROGRESS: Mutex<Option<Receiver<()>>> = Mutex::new(None);
 
 /// The name of the folder containing the log and settings files
 const APP_NAME: &str = "sprite-packer";
+
+/// Backup existing sprites into app data folder.
+/// # Arguments
+/// * `state` - The application state
+fn backup_sprites(state: &AppState) {
+    let settings = state.0.lock().expect("Failed to lock settings.").settings.clone();
+    let sprites_path = PathBuf::from(settings.sprites_path.clone());
+            let backup_sprites_path = match confy::get_configuration_file_path(APP_NAME, APP_NAME) {
+                Ok(settings_path) => {
+                    match settings_path.parent() {
+                        Some(settings_dir) => {
+                            match settings_dir.parent() {
+                                Some(app_dir) => app_dir.join("Backup"),
+                                None => log_panic!("Settings directory does not have a parent."),
+                            }
+                        }
+                        None => log_panic!("Failed to get parent of settings path: {}", settings_path.display())
+                    }
+                },
+                Err(e) => log_panic!("Failed to get config file path: {}", e),
+            };
+            match fs_util::copy_dir_all(sprites_path, backup_sprites_path) {
+                Ok(_) => info!("Backed up existing sprites."),
+                Err(e) => log_panic!("Failed to backup sprites: {}", e),
+            }
+}
+
+#[command]
+fn check_for_changed_sprites(already_changed_sprites: Vec<Sprite>, state: State<AppState>) -> Vec<Sprite> {
+    let app_state = state.0.lock().expect("Failed to lock app state.");
+    unsafe {
+        let sprites: &mut Vec<Sprite> = &mut CHANGED_SPRITES.lock().expect("Failed to lock CHANGED_SPRITES");
+        let mut sprites: Vec<Sprite> = sprites.par_iter().map(|sprite| get_collection(sprite.collection_name.clone(), app_state.loaded_collections.clone()).sprites.par_iter().find_first(|s| s.id == sprite.id).unwrap().clone()).collect();
+        sprites.retain(|sprite| !already_changed_sprites.contains(sprite));
+        return sprites;
+    }
+}
+
+/// Replace all duplicate sprites in a collection
+/// # Arguments
+/// * `source_sprite` - The sprite to replace duplicates with
+/// * `state` - The application state
+/// # Returns
+/// * `Vec<Sprite>` A list of all duplicate sprites in the collection
+#[command]
+fn replace_duplicate_sprites(source_sprite: Sprite, state: State<AppState>) {
+    let sprites_path: PathBuf;
+    {
+        let app_state = state.0.lock().expect("Failed to lock app state.");
+        sprites_path = PathBuf::from(app_state.settings.sprites_path.clone());
+    }
+
+    let source_path = if sprites_path.join(source_sprite.path.clone()).exists() {
+        sprites_path.join(source_sprite.path.clone())
+    } else if PathBuf::from(source_sprite.path.clone()).exists() {
+        PathBuf::from(source_sprite.path.clone())
+    } else {
+        log_panic!("Failed to get a valid path from source sprite at {}", source_sprite.path);
+    };
+    match fs::read_dir(sprites_path.clone()) {
+        Ok(anim_paths) => {
+            for anim_path in anim_paths {
+                match anim_path {
+                    Ok(anim_path) => {
+                        match fs::read_dir(anim_path.path()) {
+                            Ok(clip_paths) => {
+                                for path in clip_paths {
+                                    match path {
+                                        Ok(clip_path) => {
+                                            if clip_path.file_name() == "0.Atlases" {
+                                                continue;
+                                            }
+
+                                            match fs::read_dir(clip_path.path()) {
+                                                Ok(sprite_paths) => {
+                                                    for path in sprite_paths {
+                                                        match path {
+                                                            Ok(sprite_path) => {
+                                                                if (sprite_path.path().extension().unwrap() != "png") {
+                                                                    continue;
+                                                                }
+
+                                                                let sprite_name = sprite_path.file_name().into_string().expect("Failed to convert sprite name to string.");
+                                                                let sprite_data = sprite_name.split("-").collect::<Vec<&str>>();
+                                                                let frame_id = sprite_data[sprite_data.len() - 1].replace(".png", "");
+                                                                if sprite_name != source_sprite.name && 
+                                                                    frame_id.parse::<u32>().unwrap() == source_sprite.id && 
+                                                                    get_collection_from_sprite_name(sprite_name.clone(), state.clone()).name == source_sprite.collection_name {
+                                                                    match fs::copy(source_path.clone(), sprite_path.path()) {
+                                                                        Ok(_) => info!("Replaced duplicate sprite {} with {}", sprite_name, source_sprite.name),
+                                                                        Err(e) => log_panic!("Failed to replace duplicate sprite: {}", e)
+                                                                    }
+                                                                }
+                                                            }
+                                                            Err(e) => log_panic!("Failed to read sprite path: {}", e)
+                                                            }
+                                                    }
+                                                }
+                                                Err(e) => log_panic!("Failed to read clip path: {}", e)
+                                            }
+                                        }
+                                        Err(e) => log_panic!("Failed to read directory: {}", e)
+                                    }
+                                }
+                            }
+                            Err(e) => log_panic!("Failed to read directory: {}", e)
+                        }
+                    }
+                    Err(e) => log_panic!("Error while iterating path: {}", e),
+                }
+            }
+        }
+        Err(e) => log_panic!("Failed to read directory: {}", e),
+    }
+}
 
 /// Get a collection by its name
 /// # Arguments
@@ -66,10 +187,10 @@ fn main() {
 /// Set up the application
 fn setup_app() {
     let app_state = AppState(Default::default());
-    match confy::load::<Settings>(APP_NAME, None) { 
+    match confy::load::<Settings>(APP_NAME, APP_NAME) { 
         Ok(settings) => {
             app_state.0.lock().expect("Failed to lock app_state").settings = settings.clone();
-            match confy::get_configuration_file_path(APP_NAME, None) {
+            match confy::get_configuration_file_path(APP_NAME, APP_NAME) {
                 Ok(settings_path) => {
                     match settings_path.parent() {
                         Some(settings_dir) => {
@@ -78,6 +199,19 @@ fn setup_app() {
                                 Ok(_) => info!("Opened logger at: {}", log_path.display()),
                                 Err(e) => log_panic!("Failed to open logger: {}", e)
                             }
+                            // match settings_dir.parent() {
+                            //     Some(app_dir) => {
+                            //         if app_dir.join("Backup").exists() {
+                            //             load_backup_sprites(&app_state, app_dir.join("Backup"));
+                            //         } else {
+                            //             match fs::create_dir(app_dir.join("Backup")) {
+                            //                 Ok(_) => info!("Created backup directory at: {}", app_dir.join("Backup").display()),
+                            //                 Err(e) => log_panic!("Failed to create backup directory: {}", e),
+                            //             }
+                            //         }
+                            //     },
+                            //     None => panic!("Settings directory does not have a parent."),
+                            // }
                         }
                         None => log_panic!("Failed to get parent of settings path: {}", settings_path.display())
                     }
@@ -90,12 +224,20 @@ fn setup_app() {
         },
         Err(e) => log_panic!("Failed to load settings: {}", e)
     }
+    
     load_collections_and_animations(&app_state);
 
+    let sprites_path = app_state.0.lock().expect("Failed to lock app_state").settings.sprites_path.clone();
+    async_runtime::spawn(async move {
+        start_watcher(sprites_path);
+    });
+
+    let backup = CustomMenuItem::new("backup_sprites", "Backup Sprites");
     let refresh = CustomMenuItem::new("refresh", "Refresh").accelerator("F5");
     let set_sprites_path = CustomMenuItem::new("set_sprites_path", "Set Sprites Path");
     let quit = CustomMenuItem::new("quit", "Quit").accelerator("Alt+F4");
     let submenu = Menu::new()
+        .add_item(backup)
         .add_item(refresh)
         .add_item(set_sprites_path)
         .add_native_item(MenuItem::Separator)
@@ -107,6 +249,11 @@ fn setup_app() {
         .manage(app_state)
         .menu(menu)
         .on_menu_event(|event| match event.menu_item_id() {
+            "backup_sprites" => {
+                let app_handle = event.window().app_handle();
+                let state = app_handle.state::<AppState>();
+                backup_sprites(&state);
+            }
             "quit" => event.window().close().expect("Failed to close window from Options menu"),
             "refresh" => event.window().emit("refresh", ()).expect("Failed to emit refresh event"),
             "set_sprites_path" => {
@@ -118,14 +265,17 @@ fn setup_app() {
         })
         .invoke_handler(tauri::generate_handler![
             cancel_pack,
+            check_for_changed_sprites,
             debug,
             get_animation,
             get_animation_name_from_collection_name,
             get_animation_list,
+            get_collection_from_sprite_name,
             get_collections_from_animation_name,
             get_language,
             get_sprites_path,
             pack_single_collection,
+            replace_duplicate_sprites,
             set_language
         ])
         .build(tauri::generate_context!())
@@ -133,16 +283,62 @@ fn setup_app() {
 
     app.run(move |app_handle, event| match event {
         ExitRequested { api, .. } => {
-            api.prevent_exit();
-            
+            api.prevent_exit(); 
+
             let state = app_handle.state::<AppState>();
             let settings = state.0.lock().expect("Failed to lock app_state").settings.clone();
-            confy::store(APP_NAME, None, settings).expect("Failed to save settings");
+            confy::store(APP_NAME, APP_NAME, settings).expect("Failed to save settings");
 
             app_handle.exit(0);
         }
         _ => {}
     });
+}
+
+/// Load backup sprites from app data folder.
+/// # Arguments
+/// * `state` - The application state
+/// * `sprites_path` - The path to the backup sprites folder
+fn load_backup_sprites(state: &AppState, sprites_path: PathBuf) {
+    let mut app_state = state.0.lock().expect("Failed to lock app_state");
+    match fs::read_dir(sprites_path.clone()) {
+        Ok(anim_paths) => {
+            for anim_path in anim_paths {
+                match anim_path {
+                    Ok(anim_path) => {
+                        let sprite_info_path =
+                            anim_path.path().join("0.Atlases").join("SpriteInfo.json");
+                        match fs::read_to_string(sprite_info_path) {
+                            Ok(text) => {
+                                let sprite_info: SpriteInfo = match serde_json::from_str(&text) {
+                                    Ok(info) => info,
+                                    Err(e) => log_panic!("Failed to parse SpriteInfo.json: {}", e),
+                                };
+
+                                for i in 0..sprite_info.id.len() {
+                                    match sprite_info.at(i) {
+                                        Some(sprite) => {
+                                            if sprites_path.join(sprite.path.clone()).exists() {
+                                                let backup_sprite = image::open(sprites_path.join(sprite.path.clone())).expect("Failed to open backup sprite");
+                                                app_state.backup_sprites.insert(sprite, backup_sprite);
+                                            } else if PathBuf::from(sprite.clone().path.clone()).exists() {
+                                                let backup_sprite = image::open(sprite.path.clone()).expect("Failed to open backup sprite");
+                                                app_state.backup_sprites.insert(sprite, backup_sprite);
+                                            }
+                                        }
+                                        None => log_panic!("Failed to get sprite at index {}.", i),
+                                    }
+                                }
+                            }
+                            Err(e) => log_panic!("Failed to read SpriteInfo.json: {}", e),
+                        }
+                    }
+                    Err(e) => log_panic!("Error while iterating path: {}", e),
+                }
+            }
+        }
+        Err(e) => log_panic!("Failed to read directory: {}", e),
+    }
 }
 
 /// Load collections and animations from sprite files on disk
@@ -348,7 +544,12 @@ async fn pack_collection(
     let sprite_num = Mutex::new(0 as usize);
     let atlas_width = atlas.width();
     let atlas_height = atlas.height();
-    let gen_atlas = Mutex::new(DynamicImage::new_rgba8(atlas_width, atlas_height));
+    let mut new_atlas = DynamicImage::new_rgba8(atlas_width, atlas_height);
+    match new_atlas.copy_from(&atlas, 0, 0) {
+        Ok(_) => info!("Successfully copied from atlas."),
+        Err(e) => log_panic!("Failed to copy atlas: {}", e),
+    }
+    let gen_atlas = Mutex::new(new_atlas);
     collection.sprites.par_iter().try_for_each(|sprite| {
         let frame_path = match PathBuf::from_str(sprites_path.as_str()) {
             Ok(path) => path.join(sprite.path.clone()),
@@ -388,7 +589,7 @@ async fn pack_collection(
                 }
 
                 unsafe {
-                    match RX.lock().expect("Failed to lock rx").as_ref() {
+                    match RX_PROGRESS.lock().expect("Failed to lock rx").as_ref() {
                         Some(rx) => {
                             match rx.try_recv() {
                                 Ok(_) => {
@@ -398,7 +599,7 @@ async fn pack_collection(
                                 Err(_) => {}
                             }
                         }
-                        None => log_panic!("RX is None"),
+                        None => log_panic!("RX_PROGRESS is None"),
                     }
                 }
 
@@ -454,28 +655,113 @@ async fn pack_collection(
 fn select_sprites_path(state: &AppState) {
     let mut app_state = state.0.lock().expect("Failed to lock app state");
     app_state.settings.sprites_path = "".to_string();
-    while app_state.settings.sprites_path == "".to_string() {
-        match FileDialogBuilder::new()
-            .set_directory("~")
-            .pick_folder() {
-                Some(folder_path) => {
-                    app_state.settings.sprites_path = match folder_path.into_os_string().into_string() {
-                        Ok(path) => path,
-                        Err(e) => log_panic!("Failed to convert path to string: {:?}", e),
-                    };
-                }
-                None => warn!("No path for sprites folder selected.")
+    match FileDialogBuilder::new()
+        .set_directory("~")
+        .pick_folder() {
+            Some(folder_path) => {
+                app_state.settings.sprites_path = match folder_path.into_os_string().into_string() {
+                    Ok(path) => path,
+                    Err(e) => log_panic!("Failed to convert path to string: {:?}", e),
+                };
             }
+            None => warn!("No path for sprites folder selected.")
         }
 
     info!("Selected sprites path as: {}", app_state.settings.sprites_path);
+}
+
+/// Begin watching sprites path for changes
+/// # Arguments
+/// * `state` - The application state
+fn start_watcher(sprites_path: String) {
+    let (tx_watcher, rx_watcher) = mpsc::channel();
+    let config = notify::Config::default().with_compare_contents(true).with_poll_interval(std::time::Duration::from_secs(1));
+    let mut watcher = match notify::PollWatcher::new(tx_watcher, config) {
+        Ok(watcher) => watcher,
+        Err(e) => log_panic!("Failed to create watcher: {}", e),
+    };
+
+    let watch_path = Path::new(&sprites_path);
+    match watcher.watch(watch_path, RecursiveMode::Recursive) {
+        Ok(_) => info!("Watching folder: {}", sprites_path),
+        Err(e) => log_panic!("Failed to watch folder: {}", e),
+    }
+
+    loop {
+        match rx_watcher.recv() {
+            Ok(result) => {
+                match result {
+                    Ok(event) => {
+                        info!("Event: {:?}", event);
+                        match &event.kind {
+                            EventKind::Modify(modify_kind) => {
+                                match modify_kind {
+                                    ModifyKind::Metadata(kind) => {
+                                        for path in &event.paths {
+                                            let path = path.strip_prefix(sprites_path.clone()).expect("Failed to strip prefix from path.");
+                                            let path_string = match path.to_str() {
+                                                Some(str) => String::from(str),
+                                                None => log_panic!("Failed to convert path to string."),
+                                            };
+                                            let paths = path_string.split(['/', '\\']).collect::<Vec<&str>>();
+                                            let sprite_info_path = PathBuf::from(sprites_path.clone()).join(paths[0]).join("0.Atlases").join("SpriteInfo.json");
+                                            let collection_name = match fs::read_to_string(sprite_info_path) {
+                                                Ok(text) => {
+                                                    let sprite_info: SpriteInfo = match serde_json::from_str(&text) {
+                                                        Ok(info) => info,
+                                                        Err(e) => log_panic!("Failed to parse SpriteInfo.json: {}", e),
+                                                    };
+                                                    sprite_info.collection_name[0].to_string()
+                                                },
+                                                Err(e) => log_panic!("Failed to read SpriteInfo.json: {}", e),
+                                            };
+                                            if paths.len() < 3 {
+                                                continue;
+                                            }
+                                            let sprite_name = paths[2].to_string();
+                                            let sprite_data = sprite_name.split("-").collect::<Vec<&str>>();
+                                            let sprite_id = sprite_data[sprite_data.len() - 1].replace(".png", "");
+                                            let sprite = Sprite {
+                                                id: sprite_id.to_string().parse::<u32>().expect("Failed to convert string sprite id to u32."),
+                                                name: sprite_name.to_string(),
+                                                collection_name: collection_name.to_string(),
+                                                path: path_string,
+                                                flipped: false,
+                                                x: 0,
+                                                y: 0,
+                                                xr: 0,
+                                                yr: 0,
+                                                width: 0,
+                                                height: 0,
+                                            };
+
+                                            unsafe {
+                                                let sprites: &mut Vec<Sprite> = &mut CHANGED_SPRITES.lock().expect("Failed to lock changed sprites");
+                                                if !sprites.contains(&sprite) {
+                                                    sprites.push(sprite);
+                                                }
+                                            }
+                                        }
+                                    },
+                                    _ => {},
+                                }
+                            },
+                            _ => {},
+                        }
+                    }
+                    Err(e) => warn!("Failed to receive event: {}", e.to_string()),
+                }
+            },
+            Err(e) => warn!("Watcher error: {}", e.to_string()),
+        }
+    }
 }
 
 /// Cancel the currently running pack task
 #[command]
 fn cancel_pack() {
     unsafe {
-        match &TX.lock().expect("Failed to lock tx").as_ref() {
+        match &TX_PROGRESS.lock().expect("Failed to lock tx").as_ref() {
             Some(tx) => tx.send(()).expect("Failed to send cancel pack signal."),
             None => warn!("No cancel signal sent."),
         }
@@ -566,6 +852,25 @@ fn get_animation_name_from_collection_name(collection_name: String, state: State
     animation.name
 }
 
+#[command]
+fn get_collection_from_sprite_name(sprite_name: String, state: State<AppState>) -> Collection {
+    let app_state = state.0.lock().expect("Failed to lock app state");
+    let collection = match app_state.loaded_collections.par_iter().find_map_first(|collection| {
+        collection.sprites.par_iter().find_map_first(|sprite| {
+            if sprite.name == sprite_name {
+                Some(collection)
+            } else {
+                None
+            }
+        })
+    }) {
+        Some(collection) => collection.clone(),
+        None => log_panic!("Failed to find collection from sprite name {:?}", sprite_name),
+    };
+
+    collection
+}
+
 /// Get a list of animation names
 /// # Arguments
 /// * `state` - The application state
@@ -628,8 +933,8 @@ fn pack_single_collection(collection_name: String, app_handle: AppHandle, state:
 
     unsafe {
         let (tx, rx) = mpsc::channel();
-        TX = Mutex::new(Some(tx));
-        RX = Mutex::new(Some(rx));
+        TX_PROGRESS = Mutex::new(Some(tx));
+        RX_PROGRESS = Mutex::new(Some(rx));
         async_runtime::spawn(pack_collection(collection, window, sprites_path));
     }
 }
