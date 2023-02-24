@@ -1,6 +1,6 @@
 # Sprite Packer
 
-This is a re-implementation of [HollowKnight.SpritePacker](https://github.com/magegihk/HollowKnight.SpritePacker), originally created by[magegihk](https://github.com/magegihk), using the [Tauri](https://tauri.app) framework with a [ReactJS](https://reactjs.org/) frontend. It mainly serves as a playground for me to learn React.
+This is a re-implementation of [HollowKnight.SpritePacker](https://github.com/magegihk/HollowKnight.SpritePacker), originally created by [magegihk](https://github.com/magegihk), using the [Tauri](https://tauri.app) framework with a [ReactJS](https://reactjs.org/) frontend. It mainly serves as a playground for me to learn React.
 
 ## **Installation**
 ### Windows

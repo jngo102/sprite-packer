@@ -1,6 +1,6 @@
 [package]
 name = "sprite-packer"
-version = "0.1.4"
+version = "0.1.3"
 description = "Packs sprites dumped by GODump into an atlas"
 authors = ["jngo102"]
 license = "MIT"

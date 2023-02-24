@@ -22,15 +22,15 @@ pub struct SpriteInfo {
     #[serde(rename = "sx")]
     pub x: Vec<i32>,
     #[serde(rename = "sy")]
-    pub y: Vec<u32>,
+    pub y: Vec<i32>,
     #[serde(rename = "sxr")]
-    pub xr: Vec<u32>,
+    pub xr: Vec<i32>,
     #[serde(rename = "syr")]
-    pub yr: Vec<u32>,
+    pub yr: Vec<i32>,
     #[serde(rename = "swidth")]
-    pub width: Vec<u32>,
+    pub width: Vec<i32>,
     #[serde(rename = "sheight")]
-    pub height: Vec<u32>,
+    pub height: Vec<i32>,
     #[serde(rename = "scollectionname")]
     pub collection_name: Vec<String>,
     #[serde(rename = "spath")]

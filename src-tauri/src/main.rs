@@ -138,6 +138,9 @@ fn replace_duplicate_sprites(source_sprite: Sprite, state: State<AppState>) {
 
                                                                 let sprite_name = sprite_path.file_name().into_string().expect("Failed to convert sprite name to string.");
                                                                 let sprite_data = sprite_name.split("-").collect::<Vec<&str>>();
+                                                                if sprite_data.len() < 3 {
+                                                                    continue;
+                                                                }
                                                                 let frame_id = sprite_data[sprite_data.len() - 1].replace(".png", "");
                                                                 if sprite_name != source_sprite.name && 
                                                                     frame_id.parse::<u32>().unwrap() == source_sprite.id && 
@@ -356,6 +359,9 @@ fn load_collections_and_animations(state: &AppState) {
             for anim_path in anim_paths {
                 match anim_path {
                     Ok(anim_path) => {
+                        if !anim_path.path().is_dir() {
+                            return;
+                        }
                         let sprite_info_path =
                             anim_path.path().join("0.Atlases").join("SpriteInfo.json");
                         match fs::read_to_string(sprite_info_path) {
@@ -397,6 +403,9 @@ fn load_collections_and_animations(state: &AppState) {
                                         clip_paths.into_iter().par_bridge().for_each(|clip_path| {
                                             match clip_path {
                                                 Ok(clip_path) => {
+                                                    if !clip_path.path().is_dir() {
+                                                        return;
+                                                    }
                                                     match clip_path.path().file_name() {
                                                         Some(file_name) => {
                                                             if file_name == "0.Atlases" {
@@ -432,6 +441,8 @@ fn load_collections_and_animations(state: &AppState) {
                                                                                 Err(e) => log_panic!("Failed to read AnimInfo.json: {}", e),
                                                                             }
                                                                             return;
+                                                                        } else if frame_path.path().extension().expect("Failed to get extension of frame path.") != "png" {
+                                                                            return;
                                                                         }
                                                                         
                                                                         let sprite = match sprite_info.path.par_iter().position_first(|path| frame_path.path().ends_with(path)) {
@@ -454,8 +465,8 @@ fn load_collections_and_animations(state: &AppState) {
                                                             });
                                                         }
                                                         Err(e) => log_panic!(
-                                                            "Failed to read directory {:?}: {}",
-                                                            anim_path, e
+                                                            "Failed to read clip directory {:?}: {}",
+                                                            clip_path.path().display(), e
                                                         ),
                                                     }
 
@@ -488,13 +499,13 @@ fn load_collections_and_animations(state: &AppState) {
                                                 }
                                                 Err(e) => log_panic!(
                                                     "Failed to get entry from {:?}: {}",
-                                                    anim_path, e
+                                                    anim_path.path().display(), e
                                                 ),
                                             }
                                         });
                                     }
                                     Err(e) => {
-                                        log_panic!("Failed to read directory {:?}: {}", anim_path, e)
+                                        log_panic!("Failed to read anim directory {:?}: {}", anim_path.path().display(), e)
                                     }
                                 }
 
@@ -523,7 +534,7 @@ fn load_collections_and_animations(state: &AppState) {
                 }
             }
         }
-        Err(e) => log_panic!("Failed to read directory: {}", e),
+        Err(e) => log_panic!("Failed to read sprites directory {}: {}", app_state.settings.sprites_path.clone(), e),
     }
 
     app_state.loaded_collections.par_sort();
@@ -547,8 +558,8 @@ async fn pack_collection(
         Err(e) => log_panic!("Failed to open atlas file: {}", e),
     };
     let sprite_num = Mutex::new(0 as usize);
-    let atlas_width = atlas.width();
-    let atlas_height = atlas.height();
+    let atlas_width = atlas.width() as i32;
+    let atlas_height = atlas.height() as i32;
     let gen_atlas = Mutex::new(atlas);
     collection.sprites.par_iter().try_for_each(|sprite| {
         let frame_path = match PathBuf::from_str(sprites_path.as_str()) {
@@ -562,15 +573,17 @@ async fn pack_collection(
 
         (0..frame_image.width()).into_par_iter().try_for_each(|i| {
             (0..frame_image.height()).into_par_iter().try_for_each(|j| {
+                let i = i as i32;
+                let j = j as i32;
                 let x = if sprite.flipped {
-                    sprite.x + j as i32 - sprite.yr as i32
+                    sprite.x + j - sprite.yr
                 } else {
-                    sprite.x + i as i32 - sprite.xr as i32
+                    sprite.x + i - sprite.xr
                 };
                 let y = if sprite.flipped {
-                    atlas_height as i32 - (sprite.y + i) as i32 - 1 + sprite.xr as i32
+                    atlas_height - (sprite.y + i) - 1 + sprite.xr
                 } else {
-                    atlas_height as i32 - (sprite.y + j) as i32 - 1 + sprite.yr as i32
+                    atlas_height - (sprite.y + j) - 1 + sprite.yr
                 };
                 if i >= sprite.xr && i < (sprite.xr + sprite.width)
                     && j >= sprite.yr && j < (sprite.yr + sprite.height)
@@ -581,7 +594,7 @@ async fn pack_collection(
                             atlas.put_pixel(
                                 x as u32,
                                 y as u32,
-                                frame_image.get_pixel(i, frame_image.height() - j - 1),
+                                frame_image.get_pixel(i as u32, (frame_image.height() as i32 - j - 1) as u32),
                             );
                         }
                         Err(e) => log_panic!("Failed to lock generated atlas: {}", e),
@@ -657,6 +670,7 @@ fn select_sprites_path(state: &AppState) {
     app_state.settings.sprites_path = "".to_string();
     match FileDialogBuilder::new()
         .set_directory("~")
+        .set_title("Choose folder containing sprites")
         .pick_folder() {
             Some(folder_path) => {
                 app_state.settings.sprites_path = match folder_path.into_os_string().into_string() {
