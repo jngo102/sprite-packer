@@ -45,8 +45,11 @@ struct ProgressPayload {
 
 struct AppState(Mutex<App>);
 
+/// A list containing all sprites that were changed
 static mut CHANGED_SPRITES: Mutex<Vec<Sprite>> = Mutex::new(Vec::new());
+/// Sender of pack progress
 static mut TX_PROGRESS: Mutex<Option<Sender<()>>> = Mutex::new(None);
+/// Receiver of pack progress
 static mut RX_PROGRESS: Mutex<Option<Receiver<()>>> = Mutex::new(None);
 
 /// The name of the folder containing the log and settings files
@@ -546,12 +549,7 @@ async fn pack_collection(
     let sprite_num = Mutex::new(0 as usize);
     let atlas_width = atlas.width();
     let atlas_height = atlas.height();
-    let mut new_atlas = DynamicImage::new_rgba8(atlas_width, atlas_height);
-    match new_atlas.copy_from(&atlas, 0, 0) {
-        Ok(_) => info!("Successfully copied from atlas."),
-        Err(e) => log_panic!("Failed to copy atlas: {}", e),
-    }
-    let gen_atlas = Mutex::new(new_atlas);
+    let gen_atlas = Mutex::new(atlas);
     collection.sprites.par_iter().try_for_each(|sprite| {
         let frame_path = match PathBuf::from_str(sprites_path.as_str()) {
             Ok(path) => path.join(sprite.path.clone()),
@@ -562,28 +560,28 @@ async fn pack_collection(
             Err(e) => log_panic!("Failed to open frame image at {:?}: {}", frame_path.display(), e),
         };
 
-        (0..frame_image.width() as i32).into_par_iter().try_for_each(|i| {
-            (0..frame_image.height() as i32).into_par_iter().try_for_each(|j| {
+        (0..frame_image.width()).into_par_iter().try_for_each(|i| {
+            (0..frame_image.height()).into_par_iter().try_for_each(|j| {
                 let x = if sprite.flipped {
-                    sprite.x + j - sprite.yr
+                    sprite.x + j as i32 - sprite.yr as i32
                 } else {
-                    sprite.x + i - sprite.xr
+                    sprite.x + i as i32 - sprite.xr as i32
                 };
                 let y = if sprite.flipped {
-                    atlas_width as i32 - (sprite.y + i) - 1 + sprite.xr
+                    atlas_height as i32 - (sprite.y + i) as i32 - 1 + sprite.xr as i32
                 } else {
-                    atlas_height as i32 - (sprite.y + j) - 1 + sprite.yr
+                    atlas_height as i32 - (sprite.y + j) as i32 - 1 + sprite.yr as i32
                 };
-                if i >= sprite.xr && i < sprite.xr + sprite.width
-                    && j >= sprite.yr && j < sprite.yr + sprite.height
-                    && x >= 0 && x < atlas_width as i32 && y < atlas_height as i32
+                if i >= sprite.xr && i < (sprite.xr + sprite.width)
+                    && j >= sprite.yr && j < (sprite.yr + sprite.height)
+                    && x >= 0 && x < atlas_width as i32 && y >= 0 && y < atlas_height as i32
                 {
                     match gen_atlas.lock() {
                         Ok(mut atlas) => {
                             atlas.put_pixel(
                                 x as u32,
-                                cmp::max(y, 0i32) as u32,
-                                frame_image.get_pixel(i as u32, frame_image.height() - j as u32 - 1),
+                                y as u32,
+                                frame_image.get_pixel(i, frame_image.height() - j - 1),
                             );
                         }
                         Err(e) => log_panic!("Failed to lock generated atlas: {}", e),
@@ -722,9 +720,16 @@ fn start_watcher(sprites_path: String) {
                                             }
                                             let sprite_name = paths[2].to_string();
                                             let sprite_data = sprite_name.split("-").collect::<Vec<&str>>();
-                                            let sprite_id = sprite_data[sprite_data.len() - 1].replace(".png", "");
+                                            if sprite_data.len() < 3 {
+                                                continue;
+                                            }
+                                            let sprite_id_string = sprite_data[sprite_data.len() - 1].replace(".png", "");
+                                            let sprite_id = match sprite_id_string.parse::<u32>() {
+                                                Ok(id) => id,
+                                                Err(e) => log_panic!("Failed to parse sprite id {}: {}",sprite_id_string, e),
+                                            };
                                             let sprite = Sprite {
-                                                id: sprite_id.to_string().parse::<u32>().expect("Failed to convert string sprite id to u32."),
+                                                id: sprite_id,
                                                 name: sprite_name.to_string(),
                                                 collection_name: collection_name.to_string(),
                                                 path: path_string,
@@ -855,6 +860,12 @@ fn get_animation_name_from_collection_name(collection_name: String, state: State
 }
 
 #[command]
+/// Get a collection from a sprite's name
+/// # Arguments
+/// * `sprite_name` - The name of the sprite
+/// * `state` - The application state
+/// # Returns
+/// * `Collection` - The found collection
 fn get_collection_from_sprite_name(sprite_name: String, state: State<AppState>) -> Collection {
     let app_state = state.0.lock().expect("Failed to lock app state");
     let collection = match app_state.loaded_collections.par_iter().find_map_first(|collection| {
@@ -918,6 +929,11 @@ fn get_sprites_path(state: State<AppState>) -> String {
 }
 
 #[command]
+/// Get the application's mode (theme)
+/// # Arguments
+/// * `state` - The application state
+/// # Returns
+/// * `String` - The application's mode
 fn get_mode(state: State<AppState>) -> String {
     let app_state = state.0.lock().expect("Failed to lock app state");
     app_state.settings.mode.clone()
@@ -948,6 +964,12 @@ fn pack_single_collection(collection_name: String, app_handle: AppHandle, state:
 }
 
 #[command]
+/// Change the application's language
+/// # Arguments
+/// * `language` - The language to change to
+/// * `menu_items` - The menu items to change
+/// * `app_handle` - The application handle
+/// * `state` - The application state
 fn set_language(language: String, menu_items: Vec<String>, app_handle: AppHandle, state: State<AppState>) {
     let mut app_state = state.0.lock().expect("Failed to lock app state");
     let menu_handle = match app_handle.get_window("main") {
@@ -971,6 +993,10 @@ fn set_language(language: String, menu_items: Vec<String>, app_handle: AppHandle
 }
 
 #[command]
+/// Set the [theme] mode of the application
+/// # Arguments
+/// * `mode` - The mode to set to
+/// * `state` - The application state
 fn set_mode(mode: String, state: State<AppState>) {
     let mut app_state = state.0.lock().expect("Failed to lock app state");
     app_state.settings.mode = mode.clone();

@@ -1,5 +1,7 @@
 use crate::tk2d::sprite::Sprite;
-use serde::{Deserialize, Serialize};
+use serde::{de::{self, Visitor}, Deserialize, Deserializer, Serialize};
+use std::cmp;
+use std::fmt;
 use std::path::PathBuf;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -20,15 +22,15 @@ pub struct SpriteInfo {
     #[serde(rename = "sx")]
     pub x: Vec<i32>,
     #[serde(rename = "sy")]
-    pub y: Vec<i32>,
+    pub y: Vec<u32>,
     #[serde(rename = "sxr")]
-    pub xr: Vec<i32>,
+    pub xr: Vec<u32>,
     #[serde(rename = "syr")]
-    pub yr: Vec<i32>,
+    pub yr: Vec<u32>,
     #[serde(rename = "swidth")]
-    pub width: Vec<i32>,
+    pub width: Vec<u32>,
     #[serde(rename = "sheight")]
-    pub height: Vec<i32>,
+    pub height: Vec<u32>,
     #[serde(rename = "scollectionname")]
     pub collection_name: Vec<String>,
     #[serde(rename = "spath")]
