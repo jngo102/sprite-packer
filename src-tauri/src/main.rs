@@ -3,6 +3,11 @@
     windows_subsystem = "windows"
 )]
 
+#[deny(missing_docs)]
+#[deny(unused_assignments)]
+#[deny(unused_imports)]
+#[deny(unused_variables)]
+
 mod app;
 mod macros;
 mod tk2d;
@@ -17,13 +22,14 @@ use tk2d::cln::Collection;
 use tk2d::info::{AnimInfo, SpriteInfo};
 use tk2d::sprite::Sprite;
 use util::fs as fs_util;
-use image::{DynamicImage, GenericImage, GenericImageView};
+use file_diff;
+use image::{GenericImage, GenericImageView};
 use log::{error, info, LevelFilter, warn};
 use notify::{EventKind, RecursiveMode, Watcher};
 use rayon::prelude::*;
 use serde::Serialize;
 use simple_logging;
-use std::cmp;
+use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::ops::ControlFlow;
@@ -82,6 +88,74 @@ fn backup_sprites(state: &AppState) {
 }
 
 #[command]
+fn check(state: State<AppState>) -> Vec<Sprite> {
+    let app_state = state.0.lock().expect("Failed to lock app state.");
+    let sprites_path = app_state.settings.sprites_path.clone();
+    let mut problem_sprites = Vec::new();
+    for collection in &app_state.loaded_collections {
+        let mut sprite_map: HashMap<u32, Vec<Sprite>> = HashMap::new();
+        for sprite in &collection.sprites {
+            if sprite_map.contains_key(&sprite.id) && !sprite_map[&sprite.id].contains(sprite) {
+                for existing_sprite in &sprite_map[&sprite.id] {
+                    let existing_sprite_path = existing_sprite.path.clone();
+                    let mut path1 = PathBuf::from(sprites_path.clone()).join(existing_sprite_path.clone());
+                    if !path1.exists() {
+                        path1 = PathBuf::from(existing_sprite_path.clone());
+                    }
+                    let mut path2 = PathBuf::from(sprites_path.clone()).join(sprite.path.clone());
+                    if !path2.exists() {
+                        path2 = PathBuf::from(sprite.path.clone());
+                    }
+                    let mut file1 = match fs::OpenOptions::new().read(true).open(&path1) {
+                        Ok(file) => file,
+                        Err(e) => log_panic!("Failed to open file {:?}: {}", path1.display(), e),
+                    };
+                    let mut file2 = match fs::OpenOptions::new().read(true).open(&path2) {
+                        Ok(file) => file,
+                        Err(e) => log_panic!("Failed to open file {:?}: {}", path2.display(), e),
+                    };
+                    // if file_diff::diff_files(&mut file1, &mut file2) {
+                    //     info!("Sprite at path {:?} is the same as existing sprite at path {:?}.", sprite.path.clone(), existing_sprite_path);
+                    //     continue;
+                    // }
+
+                    warn!("Sprite at path1 {:?} and sprite at path2 {:?} differ.", path1, path2);
+
+                    for sprite in &sprite_map[&sprite.id] {
+                        if !problem_sprites.contains(sprite) {
+                            problem_sprites.push(sprite.clone());
+                        }
+                    }
+                    if !problem_sprites.contains(sprite) {
+                        problem_sprites.push(sprite.clone());
+                    }
+                    break;
+                }
+            } else if !sprite_map.contains_key(&sprite.id) {
+                let sprite_data = sprite.name.split("-").collect::<Vec<&str>>();
+                let sprite_id_string = sprite_data[sprite_data.len() - 1].replace(".png", "");
+                let sprite_id = sprite_id_string.parse::<u32>().expect("Failed to convert Sprite ID string to u32.");
+                sprite_map.insert(sprite_id, vec![sprite.clone()]);
+            } else {
+                sprite_map.get_mut(&sprite.id).unwrap().push(sprite.clone());
+            }
+        }
+    }
+
+    for sprite in &problem_sprites {
+        warn!("Problem sprite at path {:?} is different from sprites with the same ID.", sprite.path.clone());
+    }
+
+    return problem_sprites;
+}
+
+/// Check for any sprites that have been changed since the application started
+/// # Arguments
+/// * `already_changed_sprites` - A list of sprites that have already been marked as changed in the application
+/// * `state` - The application state
+/// # Returns
+/// * `Vec<Sprite>` A list of all changed sprites
+#[command]
 fn check_for_changed_sprites(already_changed_sprites: Vec<Sprite>, state: State<AppState>) -> Vec<Sprite> {
     let app_state = state.0.lock().expect("Failed to lock app state.");
     unsafe {
@@ -118,6 +192,9 @@ fn replace_duplicate_sprites(source_sprite: Sprite, state: State<AppState>) {
             for anim_path in anim_paths {
                 match anim_path {
                     Ok(anim_path) => {
+                        if !PathBuf::from(anim_path.path()).is_dir() {
+                            continue;
+                        }
                         match fs::read_dir(anim_path.path()) {
                             Ok(clip_paths) => {
                                 for path in clip_paths {
@@ -271,6 +348,7 @@ fn setup_app() {
         })
         .invoke_handler(tauri::generate_handler![
             cancel_pack,
+            check,
             check_for_changed_sprites,
             debug,
             get_animation,
@@ -354,7 +432,8 @@ fn load_backup_sprites(state: &AppState, sprites_path: PathBuf) {
 /// * `state` - The application state
 fn load_collections_and_animations(state: &AppState) {
     let mut app_state = state.0.lock().expect("Failed to lock app state");
-    match fs::read_dir(app_state.settings.sprites_path.clone()) {
+    let sprites_path = PathBuf::from(app_state.settings.sprites_path.clone());
+    match fs::read_dir(sprites_path.clone()) {
         Ok(anim_paths) => {
             for anim_path in anim_paths {
                 match anim_path {
@@ -374,6 +453,10 @@ fn load_collections_and_animations(state: &AppState) {
                                 for i in 0..sprite_info.id.len() {
                                     match sprite_info.at(i) {
                                         Some(sprite) => {
+                                            if !sprites_path.join(sprite.path.clone()).exists() && !PathBuf::from(sprite.path.clone()).exists() {
+                                                continue;
+                                            }
+
                                             match app_state.loaded_collections.iter().find(|cln| cln.name == sprite.collection_name) {
                                                 Some(collection) => {
                                                     let mut collection = collection.clone();
@@ -710,7 +793,7 @@ fn start_watcher(sprites_path: String) {
                         match &event.kind {
                             EventKind::Modify(modify_kind) => {
                                 match modify_kind {
-                                    ModifyKind::Metadata(kind) => {
+                                    ModifyKind::Metadata(_) => {
                                         for path in &event.paths {
                                             let path = path.strip_prefix(sprites_path.clone()).expect("Failed to strip prefix from path.");
                                             let path_string = match path.to_str() {

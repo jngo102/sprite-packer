@@ -26,7 +26,7 @@ export default class SelectableList extends Component<SelectableListProps, Selec
                 <List dense
                     disablePadding
                     sx={{
-                        maxHeight: window.innerHeight - 64,
+                        maxHeight: this.getHeight(),
                         overflowY: "auto"
                     }}>
                     <ListSubheader>
@@ -45,6 +45,19 @@ export default class SelectableList extends Component<SelectableListProps, Selec
                 </List>
             </Grid>
         )
+    }
+
+    getHeight(): number {
+        var height = window.innerHeight
+        if (document.getElementById("clip-preview") != null) {
+            height -= (document.getElementById("clip-preview") as HTMLCanvasElement).height
+        }
+        if (document.getElementById("navbar") != null) {
+            height -= (document.getElementById("navbar") as HTMLElement).clientHeight
+        }
+        height -= 64
+        height = Math.max(height, 256)
+        return height
     }
 
     updateSelected(item: string) {

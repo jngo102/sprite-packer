@@ -70,9 +70,9 @@ export default class App extends React.Component<{}, AppState> {
 
     this.cancelPack = this.cancelPack.bind(this)
     this.changeMode = this.changeMode.bind(this)
+    this.check = this.check.bind(this)
     this.checkForChangedSprites = this.checkForChangedSprites.bind(this)
     this.draw = this.draw.bind(this)
-    this.findDuplicates = this.findDuplicates.bind(this)
     this.incrementFrameIndex = this.incrementFrameIndex.bind(this)
     this.packCollection = this.packCollection.bind(this)
     this.replaceDuplicates = this.replaceDuplicates.bind(this)
@@ -139,8 +139,13 @@ export default class App extends React.Component<{}, AppState> {
     return (
       <ThemeProvider theme={this.state.theme}>
         <CssBaseline enableColorScheme />
-        <Grid container columns={{ xs: 7 }}>
-          <AppBar position="sticky">
+        <Grid container 
+          columns={{ xs: 6 }} 
+          sx={{
+            height: "100vh",
+            maxHeight: "100vh" 
+          }}>
+          <AppBar id="navbar" position="sticky">
             <span>
               <WbSunnyIconSharp />
               <Switch onChange={this.changeMode}
@@ -148,6 +153,9 @@ export default class App extends React.Component<{}, AppState> {
               <ModeNightIconSharp />
             </span>
           </AppBar>
+          <Grid item>
+            <canvas id="clip-preview" style={{ maxWidth: "100%", maxHeight: "100%" }} />
+          </Grid>
           <Grid container item>
             <SelectableList items={this.state.animationNames}
               onSelectItem={this.setCurrentAnimation}
@@ -164,9 +172,6 @@ export default class App extends React.Component<{}, AppState> {
               selectedItem={this.state.currentFrame?.name as string}
               title={i18n.frames} />
             <Grid container item xs={2}>
-              <Grid item>
-                <canvas id="clip-preview" style={{ maxWidth: "100%", maxHeight: "100%" }} />
-              </Grid>
               <SelectableList items={this.state.currentCollections?.map(cln => cln.name) as string[]}
                 onSelectItem={this.setCurrentCollection}
                 selectedItem={this.state.currentCollection?.name as string}
@@ -178,8 +183,8 @@ export default class App extends React.Component<{}, AppState> {
                 selectedItem={this.state.currentFrame?.name as string}
                 title={i18n.duplicates} />
               <Grid item>
-                <button id="find-duplicates-button" onClick={this.findDuplicates}>
-                  {i18n.findDuplicates}
+                <button id="check-button" onClick={this.check}>
+                  {i18n.check}
                 </button>
               </Grid>
             </Grid>
@@ -281,9 +286,11 @@ export default class App extends React.Component<{}, AppState> {
     }
   }
 
-  findDuplicates() {
-    invoke("find_duplicate_sprites").then(duplicates => {
-      this.setState({ duplicateSprites: duplicates as string[] })
+  check() {
+    invoke("check").then(result => {
+      if (result as boolean) {
+
+      }
     })
   }
 

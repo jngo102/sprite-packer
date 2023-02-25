@@ -14,3 +14,9 @@ pub struct Sprite {
     pub path: String,
     pub flipped: bool,
 }
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct SpriteImage {
+    pub sprite: Sprite, 
+    pub image: image::DynamicImage,
+}
