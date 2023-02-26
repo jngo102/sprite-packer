@@ -12,6 +12,7 @@ import { Clip, Collection, InspectMode, Animation, ProgressPayload, Sprite } fro
 import { i18n, languages } from './data/i18n'
 
 interface AppState {
+  allowedToPack: boolean,
   animationNames: string[]
   changedSprites: Sprite[]
   currentAnimation: Animation | null
@@ -40,6 +41,7 @@ export default class App extends React.Component<{}, AppState> {
   constructor(props: {}) {
     super(props)
     this.state = {
+      allowedToPack: false,
       animationNames: [],
       changedSprites: [],
       currentAnimation: null,
@@ -93,7 +95,11 @@ export default class App extends React.Component<{}, AppState> {
     })
 
     await appWindow.listen("progress", ({ event, payload }) => {
-      this.setState({ packProgress: (payload as ProgressPayload).progress })
+      let progress = (payload as ProgressPayload).progress
+      if (progress >= 100) {
+        this.setState({ allowedToPack: false })
+      }
+      this.setState({ packProgress: progress })
     })
 
     await appWindow.listen("refresh", (_) => {
@@ -177,15 +183,12 @@ export default class App extends React.Component<{}, AppState> {
                 selectedItem={this.state.currentCollection?.name as string}
                 title={i18n.atlases} />
             </Grid>
-            <Grid container item xs={2}>
-              <SelectableList items={this.state.duplicateSprites}
-                onSelectItem={this.setCurrentBackup}
-                selectedItem={this.state.currentFrame?.name as string}
-                title={i18n.duplicates} />
+            <Grid container item xs={1}>
               <Grid item>
-                <button id="check-button" onClick={this.check}>
-                  {i18n.check}
-                </button>
+                <SelectableList items={this.state.duplicateSprites}
+                  onSelectItem={this.setCurrentBackup}
+                  selectedItem={this.state.currentFrame?.name as string}
+                  title={i18n.duplicates} />
               </Grid>
             </Grid>
             <Grid container item xs={2}>
@@ -194,14 +197,17 @@ export default class App extends React.Component<{}, AppState> {
                 selectedItem={this.state.currentFrame?.name as string}
                 title={i18n.changedSprites} />
               <Grid item>
-                <button id="restore-button" onClick={this.replaceDuplicates}>
+                <button id="replace-duplicates-button" onClick={this.replaceDuplicates}>
                   {i18n.replaceDuplicates}
                 </button>
               </Grid>
             </Grid>
           </Grid>
           <Grid alignItems="stretch" container item xs={12}>
-            <button hidden={this.state.isPacking || this.state.inspectMode != InspectMode.Collection}
+            <button hidden={this.state.allowedToPack} id="check-button" style={{ padding: "16 16 8 8", width: "100%" }} onClick={this.check}>
+              {i18n.check}
+            </button>
+            <button hidden={!this.state.allowedToPack || this.state.isPacking || this.state.inspectMode != InspectMode.Collection}
               id="pack-button"
               style={{ padding: "16 16 8 8", width: "100%" }}
               onClick={this.packCollection}>
@@ -254,6 +260,7 @@ export default class App extends React.Component<{}, AppState> {
     invoke("check_for_changed_sprites", { alreadyChangedSprites: this.state.changedSprites }).then(sprites => {
       var changedSprites = sprites as Sprite[]
       var stateChangedSprites = this.state.changedSprites
+      console.log("Num already changed sprites: " + stateChangedSprites.length)
       for (const sprite of changedSprites) {
         if (!stateChangedSprites.some(s => s.name == sprite.name && s.id == sprite.id)) {
           stateChangedSprites.push(sprite)
@@ -287,10 +294,19 @@ export default class App extends React.Component<{}, AppState> {
   }
 
   check() {
-    invoke("check").then(result => {
-      if (result as boolean) {
-
+    console.log("Check")
+    invoke("check").then(sprites => {
+      let problemSprites = sprites as Sprite[]
+      if (problemSprites.length == 0) {
+        this.setState({ allowedToPack: true })
+      } else {
+        this.setState({ allowedToPack: false })
       }
+      problemSprites.forEach(sprite => {
+        if (!this.state.changedSprites.includes(sprite)) {
+          this.state.changedSprites.push(sprite)
+        }
+      })
     })
   }
 

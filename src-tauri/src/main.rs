@@ -22,11 +22,10 @@ use tk2d::cln::Collection;
 use tk2d::info::{AnimInfo, SpriteInfo};
 use tk2d::sprite::Sprite;
 use util::fs as fs_util;
-use file_diff;
 use image::{GenericImage, GenericImageView};
 use log::{error, info, LevelFilter, warn};
 use notify::{EventKind, RecursiveMode, Watcher};
-use rayon::prelude::*;
+use rayon::prelude::*;  
 use serde::Serialize;
 use simple_logging;
 use std::collections::HashMap;
@@ -35,13 +34,15 @@ use std::fs;
 use std::ops::ControlFlow;
 use std::path::{PathBuf, Path};
 use std::str::FromStr;
-use std::sync::Mutex;
+use std::sync::{Mutex, Arc};
 use std::sync::mpsc::{Receiver, self, Sender};
 use std::time::Instant;
 use tauri::{AppHandle, command, CustomMenuItem, Manager, Menu, MenuItem, State, Submenu, Window};
 use tauri::api::dialog::blocking::FileDialogBuilder;
 use tauri::async_runtime;
 use tauri::RunEvent::ExitRequested;
+
+use crate::tk2d::sprite::SpriteImage;
 
 /// A data structure containing the current pack progress
 #[derive(Clone, Serialize)]
@@ -87,6 +88,11 @@ fn backup_sprites(state: &AppState) {
             }
 }
 
+/// Check whether any sprites and their duplicates are not identical.
+/// # Arguments
+/// * `state` - The application state
+/// # Returns
+/// A list of duplicate sprites that are not identical
 #[command]
 fn check(state: State<AppState>) -> Vec<Sprite> {
     let app_state = state.0.lock().expect("Failed to lock app state.");
@@ -106,30 +112,36 @@ fn check(state: State<AppState>) -> Vec<Sprite> {
                     if !path2.exists() {
                         path2 = PathBuf::from(sprite.path.clone());
                     }
-                    let mut file1 = match fs::OpenOptions::new().read(true).open(&path1) {
-                        Ok(file) => file,
-                        Err(e) => log_panic!("Failed to open file {:?}: {}", path1.display(), e),
+                    let image1 = match image::open(path1.clone()) {
+                        Ok(image) => image,
+                        Err(e) => log_panic!("Failed to open image at path {:?}: {}", path1.display(), e),
                     };
-                    let mut file2 = match fs::OpenOptions::new().read(true).open(&path2) {
-                        Ok(file) => file,
-                        Err(e) => log_panic!("Failed to open file {:?}: {}", path2.display(), e),
+                    let image2 = match image::open(path2.clone()) {
+                        Ok(image) => image,
+                        Err(e) => log_panic!("Failed to open image at path {:?}: {}", path2.display(), e),
                     };
-                    // if file_diff::diff_files(&mut file1, &mut file2) {
-                    //     info!("Sprite at path {:?} is the same as existing sprite at path {:?}.", sprite.path.clone(), existing_sprite_path);
-                    //     continue;
-                    // }
 
-                    warn!("Sprite at path1 {:?} and sprite at path2 {:?} differ.", path1, path2);
+                    let sprite_image1 = SpriteImage {
+                        sprite: existing_sprite.clone(),
+                        image: image1,
+                    };
 
-                    for sprite in &sprite_map[&sprite.id] {
+                    let sprite_image2 = SpriteImage {
+                        sprite: sprite.clone(),
+                        image: image2,
+                    };
+
+                    if !sprite_image1.equals(&sprite_image2) {
+                        for sprite in &sprite_map[&sprite.id] {
+                            if !problem_sprites.contains(sprite) {
+                                problem_sprites.push(sprite.clone());
+                            }
+                        }
                         if !problem_sprites.contains(sprite) {
                             problem_sprites.push(sprite.clone());
                         }
+                        break;
                     }
-                    if !problem_sprites.contains(sprite) {
-                        problem_sprites.push(sprite.clone());
-                    }
-                    break;
                 }
             } else if !sprite_map.contains_key(&sprite.id) {
                 let sprite_data = sprite.name.split("-").collect::<Vec<&str>>();
@@ -170,8 +182,6 @@ fn check_for_changed_sprites(already_changed_sprites: Vec<Sprite>, state: State<
 /// # Arguments
 /// * `source_sprite` - The sprite to replace duplicates with
 /// * `state` - The application state
-/// # Returns
-/// * `Vec<Sprite>` A list of all duplicate sprites in the collection
 #[command]
 fn replace_duplicate_sprites(source_sprite: Sprite, state: State<AppState>) {
     let sprites_path: PathBuf;
@@ -187,67 +197,71 @@ fn replace_duplicate_sprites(source_sprite: Sprite, state: State<AppState>) {
     } else {
         log_panic!("Failed to get a valid path from source sprite at {}", source_sprite.path);
     };
-    match fs::read_dir(sprites_path.clone()) {
-        Ok(anim_paths) => {
-            for anim_path in anim_paths {
-                match anim_path {
-                    Ok(anim_path) => {
-                        if !PathBuf::from(anim_path.path()).is_dir() {
-                            continue;
-                        }
-                        match fs::read_dir(anim_path.path()) {
-                            Ok(clip_paths) => {
-                                for path in clip_paths {
-                                    match path {
-                                        Ok(clip_path) => {
-                                            if clip_path.file_name() == "0.Atlases" {
-                                                continue;
-                                            }
 
-                                            match fs::read_dir(clip_path.path()) {
-                                                Ok(sprite_paths) => {
-                                                    for path in sprite_paths {
-                                                        match path {
-                                                            Ok(sprite_path) => {
-                                                                if sprite_path.path().extension().unwrap() != "png" {
-                                                                    continue;
-                                                                }
+    let source_image = match image::open(source_path.clone()) {
+        Ok(image) => image,
+        Err(e) => log_panic!("Failed to open image at path {:?}: {}", source_path.display(), e),
+    };
 
-                                                                let sprite_name = sprite_path.file_name().into_string().expect("Failed to convert sprite name to string.");
-                                                                let sprite_data = sprite_name.split("-").collect::<Vec<&str>>();
-                                                                if sprite_data.len() < 3 {
-                                                                    continue;
-                                                                }
-                                                                let frame_id = sprite_data[sprite_data.len() - 1].replace(".png", "");
-                                                                if sprite_name != source_sprite.name && 
-                                                                    frame_id.parse::<u32>().unwrap() == source_sprite.id && 
-                                                                    get_collection_from_sprite_name(sprite_name.clone(), state.clone()).name == source_sprite.collection_name {
-                                                                    match fs::copy(source_path.clone(), sprite_path.path()) {
-                                                                        Ok(_) => info!("Replaced duplicate sprite {} with {}", sprite_name, source_sprite.name),
-                                                                        Err(e) => log_panic!("Failed to replace duplicate sprite: {}", e)
-                                                                    }
-                                                                }
-                                                            }
-                                                            Err(e) => log_panic!("Failed to read sprite path: {}", e)
-                                                            }
-                                                    }
-                                                }
-                                                Err(e) => log_panic!("Failed to read clip path: {}", e)
-                                            }
-                                        }
-                                        Err(e) => log_panic!("Failed to read directory: {}", e)
-                                    }
-                                }
-                            }
-                            Err(e) => log_panic!("Failed to read directory: {}", e)
-                        }
-                    }
-                    Err(e) => log_panic!("Error while iterating path: {}", e),
-                }
-            }
+    let source_image = SpriteImage {
+        sprite: source_sprite.clone(),
+        image: source_image,
+    };
+
+    let collection = get_collection(source_sprite.collection_name.clone(), state.0.lock().expect("Failed to lock app state.").loaded_collections.clone());
+    for sprite in collection.sprites {
+        if sprite.id != source_sprite.id {
+            continue;
         }
-        Err(e) => log_panic!("Failed to read directory: {}", e),
+
+        let sprite_path = if sprites_path.join(sprite.path.clone()).exists() {
+            sprites_path.join(sprite.path.clone())
+        } else if PathBuf::from(sprite.path.clone()).exists() {
+            PathBuf::from(sprite.path.clone())
+        } else {
+            log_panic!("Failed to get a valid path from sprite at {}", sprite.path);
+        };
+
+        let sprite_image = match image::open(sprite_path.clone()) {
+            Ok(image) => image,
+            Err(e) => log_panic!("Failed to open image at path {:?}: {}", sprite_path.display(), e),
+        };
+
+        let mut sprite_image = SpriteImage {
+            sprite: sprite.clone(),
+            image: sprite_image,
+        };
+
+        replace_sprite(source_image.clone(), &mut sprite_image);
+
+        match sprite_image.image.save(sprite_path.clone()) {
+            Ok(_) => info!("Replaced sprite at path {:?} with sprite at path {:?}.", sprite_path.display(), source_path.display()),
+            Err(e) => log_panic!("Failed to save image at path {:?}: {}", sprite_path.display(), e),
+        }
     }
+}
+
+/// Replace a sprite with another sprite
+/// # Arguments
+/// * `source_image` - The sprite to replace with
+/// * `target_image` - The sprite to replace
+fn replace_sprite(source_image: SpriteImage, target_image: &mut SpriteImage) {
+    let target_ptr = Arc::new(Mutex::new(target_image));
+    let sub_image = source_image.trim();
+    (0..sub_image.width()).into_par_iter().for_each(|x| {
+        (0..sub_image.height()).into_par_iter().for_each(|y| {
+            let source_y = sub_image.height() - y - 1;
+            let pixel = sub_image.get_pixel(x, source_y);
+            match target_ptr.lock() {
+                Ok(mut target_image) => {
+                    let target_x = x + target_image.sprite.xr as u32;
+                    let target_y = target_image.image.height() - (y + target_image.sprite.yr as u32) - 1;
+                    target_image.image.put_pixel(target_x, target_y, pixel);
+                },
+                Err(e) => log_panic!("Failed to lock target image mutex: {}", e),
+            }
+        });
+    });
 }
 
 /// Get a collection by its name
@@ -379,52 +393,6 @@ fn setup_app() {
         }
         _ => {}
     });
-}
-
-/// Load backup sprites from app data folder.
-/// # Arguments
-/// * `state` - The application state
-/// * `sprites_path` - The path to the backup sprites folder
-fn load_backup_sprites(state: &AppState, sprites_path: PathBuf) {
-    let mut app_state = state.0.lock().expect("Failed to lock app_state");
-    match fs::read_dir(sprites_path.clone()) {
-        Ok(anim_paths) => {
-            for anim_path in anim_paths {
-                match anim_path {
-                    Ok(anim_path) => {
-                        let sprite_info_path =
-                            anim_path.path().join("0.Atlases").join("SpriteInfo.json");
-                        match fs::read_to_string(sprite_info_path) {
-                            Ok(text) => {
-                                let sprite_info: SpriteInfo = match serde_json::from_str(&text) {
-                                    Ok(info) => info,
-                                    Err(e) => log_panic!("Failed to parse SpriteInfo.json: {}", e),
-                                };
-
-                                for i in 0..sprite_info.id.len() {
-                                    match sprite_info.at(i) {
-                                        Some(sprite) => {
-                                            if sprites_path.join(sprite.path.clone()).exists() {
-                                                let backup_sprite = image::open(sprites_path.join(sprite.path.clone())).expect("Failed to open backup sprite");
-                                                app_state.backup_sprites.insert(sprite, backup_sprite);
-                                            } else if PathBuf::from(sprite.clone().path.clone()).exists() {
-                                                let backup_sprite = image::open(sprite.path.clone()).expect("Failed to open backup sprite");
-                                                app_state.backup_sprites.insert(sprite, backup_sprite);
-                                            }
-                                        }
-                                        None => log_panic!("Failed to get sprite at index {}.", i),
-                                    }
-                                }
-                            }
-                            Err(e) => log_panic!("Failed to read SpriteInfo.json: {}", e),
-                        }
-                    }
-                    Err(e) => log_panic!("Error while iterating path: {}", e),
-                }
-            }
-        }
-        Err(e) => log_panic!("Failed to read directory: {}", e),
-    }
 }
 
 /// Load collections and animations from sprite files on disk

@@ -1,7 +1,5 @@
 use crate::tk2d::sprite::Sprite;
-use serde::{de::{self, Visitor}, Deserialize, Deserializer, Serialize};
-use std::cmp;
-use std::fmt;
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
