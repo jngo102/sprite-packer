@@ -260,12 +260,12 @@ export default class App extends React.Component<{}, AppState> {
     invoke("check_for_changed_sprites", { alreadyChangedSprites: this.state.changedSprites }).then(sprites => {
       var changedSprites = sprites as Sprite[]
       var stateChangedSprites = this.state.changedSprites
-      console.log("Num already changed sprites: " + stateChangedSprites.length)
       for (const sprite of changedSprites) {
         if (!stateChangedSprites.some(s => s.name == sprite.name && s.id == sprite.id)) {
           stateChangedSprites.push(sprite)
         }
       }
+      console.log("Num changed sprites: " + stateChangedSprites.length)
       this.setState({ changedSprites: stateChangedSprites })
     })
   }
@@ -294,7 +294,6 @@ export default class App extends React.Component<{}, AppState> {
   }
 
   check() {
-    console.log("Check")
     invoke("check").then(sprites => {
       let problemSprites = sprites as Sprite[]
       if (problemSprites.length == 0) {
@@ -303,7 +302,7 @@ export default class App extends React.Component<{}, AppState> {
         this.setState({ allowedToPack: false })
       }
       problemSprites.forEach(sprite => {
-        if (!this.state.changedSprites.includes(sprite)) {
+        if (!this.state.changedSprites.some(s => s.name == sprite.name && s.id == sprite.id)) {
           this.state.changedSprites.push(sprite)
         }
       })
@@ -328,6 +327,16 @@ export default class App extends React.Component<{}, AppState> {
 
   replaceDuplicates() {
     invoke("replace_duplicate_sprites", { sourceSprite: this.state.currentFrame })
+      .then(() => {
+        const changedSprites = this.state.changedSprites;
+        changedSprites.forEach(spr => {
+          console.log("Sprite: " + spr.name + " " + spr.id + " " + spr.collectionName + " " + (spr.id != this.state.currentFrame?.id || spr.collectionName != this.state.currentFrame?.collectionName))
+        })
+        console.log("Current frame: " + this.state.currentFrame?.name + " " + this.state.currentFrame?.id + " " + this.state.currentFrame?.collectionName)
+        const filteredSprites = changedSprites.filter(sprite => sprite.id != this.state.currentFrame?.id || sprite.collectionName != this.state.currentFrame?.collectionName)
+        console.log("Filtered sprites: " + filteredSprites.length)
+        this.setState({ changedSprites: filteredSprites })
+      })
   }
 
   setCurrentBackup(backupName: string) {

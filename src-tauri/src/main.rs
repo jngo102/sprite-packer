@@ -24,7 +24,7 @@ use tk2d::sprite::Sprite;
 use util::fs as fs_util;
 use image::{GenericImage, GenericImageView};
 use log::{error, info, LevelFilter, warn};
-use notify::{EventKind, RecursiveMode, Watcher};
+use notify::{EventKind, RecursiveMode, Watcher, PollWatcher};
 use rayon::prelude::*;  
 use serde::Serialize;
 use simple_logging;
@@ -58,6 +58,8 @@ static mut CHANGED_SPRITES: Mutex<Vec<Sprite>> = Mutex::new(Vec::new());
 static mut TX_PROGRESS: Mutex<Option<Sender<()>>> = Mutex::new(None);
 /// Receiver of pack progress
 static mut RX_PROGRESS: Mutex<Option<Receiver<()>>> = Mutex::new(None);
+
+static mut WATCHER: Option<PollWatcher> = None;
 
 /// The name of the folder containing the log and settings files
 const APP_NAME: &str = "sprite-packer";
@@ -172,8 +174,12 @@ fn check_for_changed_sprites(already_changed_sprites: Vec<Sprite>, state: State<
     let app_state = state.0.lock().expect("Failed to lock app state.");
     unsafe {
         let sprites: &mut Vec<Sprite> = &mut CHANGED_SPRITES.lock().expect("Failed to lock CHANGED_SPRITES");
-        let mut sprites: Vec<Sprite> = sprites.par_iter().map(|sprite| get_collection(sprite.collection_name.clone(), app_state.loaded_collections.clone()).sprites.par_iter().find_first(|s| s.id == sprite.id).unwrap().clone()).collect();
+        let mut sprites: Vec<Sprite> = sprites.par_iter().map(|sprite| get_collection(
+            sprite.collection_name.clone(), 
+            app_state.loaded_collections.clone())
+            .sprites.par_iter().find_first(|s| s.id == sprite.id).unwrap().clone()).collect();
         sprites.retain(|sprite| !already_changed_sprites.contains(sprite));
+        info!("Found {} changed sprites.", sprites.len());
         return sprites;
     }
 }
@@ -188,6 +194,13 @@ fn replace_duplicate_sprites(source_sprite: Sprite, state: State<AppState>) {
     {
         let app_state = state.0.lock().expect("Failed to lock app state.");
         sprites_path = PathBuf::from(app_state.settings.sprites_path.clone());
+    }
+
+    unsafe {
+        match WATCHER.as_mut() {
+            Some(watcher) => watcher.unwatch(&sprites_path.clone()).expect("Failed to unwatch sprites path."),
+            None => warn!("Watcher is None."),
+        }
     }
 
     let source_path = if sprites_path.join(source_sprite.path.clone()).exists() {
@@ -237,6 +250,18 @@ fn replace_duplicate_sprites(source_sprite: Sprite, state: State<AppState>) {
         match sprite_image.image.save(sprite_path.clone()) {
             Ok(_) => info!("Replaced sprite at path {:?} with sprite at path {:?}.", sprite_path.display(), source_path.display()),
             Err(e) => log_panic!("Failed to save image at path {:?}: {}", sprite_path.display(), e),
+        }
+    }
+
+    unsafe {
+        CHANGED_SPRITES.lock().expect("Failed to lock CHANGED_SPRITES")
+            .retain(|sprite| sprite.collection_name != source_sprite.collection_name && sprite.id != source_sprite.id);
+    }
+
+    unsafe {
+        match WATCHER.as_mut() {
+            Some(watcher) => watcher.watch(&sprites_path.clone(), RecursiveMode::Recursive).expect("Failed to unwatch sprites path."),
+            None => warn!("Watcher is None."),
         }
     }
 }
@@ -741,6 +766,7 @@ fn select_sprites_path(state: &AppState) {
 fn start_watcher(sprites_path: String) {
     let (tx_watcher, rx_watcher) = mpsc::channel();
     let config = notify::Config::default().with_compare_contents(true).with_poll_interval(std::time::Duration::from_secs(1));
+    
     let mut watcher = match notify::PollWatcher::new(tx_watcher, config) {
         Ok(watcher) => watcher,
         Err(e) => log_panic!("Failed to create watcher: {}", e),
@@ -750,6 +776,10 @@ fn start_watcher(sprites_path: String) {
     match watcher.watch(watch_path, RecursiveMode::Recursive) {
         Ok(_) => info!("Watching folder: {}", sprites_path),
         Err(e) => log_panic!("Failed to watch folder: {}", e),
+    }
+
+    unsafe {
+        WATCHER = Some(watcher);
     }
 
     loop {
