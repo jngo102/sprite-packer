@@ -3,7 +3,7 @@ import { convertFileSrc, invoke } from '@tauri-apps/api/tauri'
 import { appWindow } from '@tauri-apps/api/window'
 import LabeledLinearProgress from './components/LabeledLinearProgress'
 import SelectableList from './components/SelectableList'
-import { AppBar, Grid, MenuItem, PaletteMode, Select, Switch } from '@mui/material'
+import { AppBar, FormControl, Grid, InputLabel, MenuItem, PaletteMode, Select, Switch } from '@mui/material'
 import CssBaseline from '@mui/material/CssBaseline'
 import WbSunnyIconSharp from '@mui/icons-material/WbSunnySharp'
 import ModeNightIconSharp from '@mui/icons-material/ModeNightSharp'
@@ -151,12 +151,29 @@ export default class App extends React.Component<{}, AppState> {
             height: "100vh",
             maxHeight: "100vh" 
           }}>
-          <AppBar id="navbar" position="sticky">
+          <AppBar id="navbar" position="sticky" style={{ padding: "8px 8px 8px 8px" }}>
             <span>
               <WbSunnyIconSharp />
               <Switch onChange={this.changeMode}
                 checked={this.state.mode == "dark"} />
               <ModeNightIconSharp />
+              <FormControl sx={{ minWidth: 128 }}>
+                <InputLabel id="language-select-label">{i18n.language}</InputLabel>
+                <Select
+                  labelId="language-select-label"
+                  id="language-select"
+                  label={i18n.language}
+                  value={i18n.getLanguage()}>
+                  {this.languages.map(lang => {
+                    return <MenuItem className="language-item"
+                      key={lang}
+                      onClick={() => this.setLanguage(lang)}
+                      value={lang}>
+                      {lang}
+                    </MenuItem>
+                  })}
+                </Select>
+              </FormControl>
             </span>
           </AppBar>
           <Grid item>
@@ -182,14 +199,6 @@ export default class App extends React.Component<{}, AppState> {
                 onSelectItem={this.setCurrentCollection}
                 selectedItem={this.state.currentCollection?.name as string}
                 title={i18n.atlases} />
-            </Grid>
-            <Grid container item xs={1}>
-              <Grid item>
-                <SelectableList items={this.state.duplicateSprites}
-                  onSelectItem={this.setCurrentBackup}
-                  selectedItem={this.state.currentFrame?.name as string}
-                  title={i18n.duplicates} />
-              </Grid>
             </Grid>
             <Grid container item xs={2}>
               <SelectableList items={this.state.changedSprites.map(sprite => sprite.name) as string[]}
@@ -226,21 +235,6 @@ export default class App extends React.Component<{}, AppState> {
                 </button>
               </Grid>
             </Grid>
-          </Grid>
-          <Grid container item>
-            <Select
-              id="language-select"
-              label={i18n.language}
-              value={i18n.getLanguage()}>
-              {this.languages.map(lang => {
-                return <MenuItem className="language-item"
-                  key={lang}
-                  onClick={() => this.setLanguage(lang)}
-                  value={lang}>
-                  {lang}
-                </MenuItem>
-              })}
-            </Select>
           </Grid>
         </Grid>
       </ThemeProvider>

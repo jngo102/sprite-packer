@@ -11,7 +11,6 @@
 mod app;
 mod macros;
 mod tk2d;
-mod util;
 
 use app::app::App;
 use app::settings::Settings;
@@ -21,7 +20,6 @@ use tk2d::clip::Clip;
 use tk2d::cln::Collection;
 use tk2d::info::{AnimInfo, SpriteInfo};
 use tk2d::sprite::Sprite;
-use util::fs as fs_util;
 use image::{GenericImage, GenericImageView};
 use log::{error, info, LevelFilter, warn};
 use notify::{EventKind, RecursiveMode, Watcher, PollWatcher};
@@ -63,32 +61,6 @@ static mut WATCHER: Option<PollWatcher> = None;
 
 /// The name of the folder containing the log and settings files
 const APP_NAME: &str = "sprite-packer";
-
-/// Backup existing sprites into app data folder.
-/// # Arguments
-/// * `state` - The application state
-fn backup_sprites(state: &AppState) {
-    let settings = state.0.lock().expect("Failed to lock settings.").settings.clone();
-    let sprites_path = PathBuf::from(settings.sprites_path.clone());
-            let backup_sprites_path = match confy::get_configuration_file_path(APP_NAME, APP_NAME) {
-                Ok(settings_path) => {
-                    match settings_path.parent() {
-                        Some(settings_dir) => {
-                            match settings_dir.parent() {
-                                Some(app_dir) => app_dir.join("Backup"),
-                                None => log_panic!("Settings directory does not have a parent."),
-                            }
-                        }
-                        None => log_panic!("Failed to get parent of settings path: {}", settings_path.display())
-                    }
-                },
-                Err(e) => log_panic!("Failed to get config file path: {}", e),
-            };
-            match fs_util::copy_dir_all(sprites_path, backup_sprites_path) {
-                Ok(_) => info!("Backed up existing sprites."),
-                Err(e) => log_panic!("Failed to backup sprites: {}", e),
-            }
-}
 
 /// Check whether any sprites and their duplicates are not identical.
 /// # Arguments
@@ -321,19 +293,6 @@ fn setup_app() {
                                 Ok(_) => info!("Opened logger at: {}", log_path.display()),
                                 Err(e) => log_panic!("Failed to open logger: {}", e)
                             }
-                            // match settings_dir.parent() {
-                            //     Some(app_dir) => {
-                            //         if app_dir.join("Backup").exists() {
-                            //             load_backup_sprites(&app_state, app_dir.join("Backup"));
-                            //         } else {
-                            //             match fs::create_dir(app_dir.join("Backup")) {
-                            //                 Ok(_) => info!("Created backup directory at: {}", app_dir.join("Backup").display()),
-                            //                 Err(e) => log_panic!("Failed to create backup directory: {}", e),
-                            //             }
-                            //         }
-                            //     },
-                            //     None => panic!("Settings directory does not have a parent."),
-                            // }
                         }
                         None => log_panic!("Failed to get parent of settings path: {}", settings_path.display())
                     }
@@ -354,12 +313,10 @@ fn setup_app() {
         start_watcher(sprites_path);
     });
 
-    let backup = CustomMenuItem::new("backup_sprites", "Backup Sprites");
     let refresh = CustomMenuItem::new("refresh", "Refresh").accelerator("F5");
     let set_sprites_path = CustomMenuItem::new("set_sprites_path", "Set Sprites Path");
     let quit = CustomMenuItem::new("quit", "Quit").accelerator("Alt+F4");
     let submenu = Menu::new()
-        .add_item(backup)
         .add_item(refresh)
         .add_item(set_sprites_path)
         .add_native_item(MenuItem::Separator)
@@ -371,11 +328,6 @@ fn setup_app() {
         .manage(app_state)
         .menu(menu)
         .on_menu_event(|event| match event.menu_item_id() {
-            "backup_sprites" => {
-                let app_handle = event.window().app_handle();
-                let state = app_handle.state::<AppState>();
-                backup_sprites(&state);
-            }
             "quit" => event.window().close().expect("Failed to close window from Options menu"),
             "refresh" => event.window().emit("refresh", ()).expect("Failed to emit refresh event"),
             "set_sprites_path" => {
