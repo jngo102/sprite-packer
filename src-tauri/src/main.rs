@@ -38,7 +38,7 @@ use std::time::Instant;
 use tauri::{AppHandle, command, CustomMenuItem, Manager, Menu, MenuItem, State, Submenu, Window};
 use tauri::api::dialog::blocking::FileDialogBuilder;
 use tauri::async_runtime;
-use tauri::RunEvent::ExitRequested;
+use tauri::RunEvent::{ExitRequested, Ready};
 
 use crate::tk2d::sprite::SpriteImage;
 
@@ -281,37 +281,6 @@ fn main() {
 /// Set up the application
 fn setup_app() {
     let app_state = AppState(Default::default());
-    match confy::load::<Settings>(APP_NAME, APP_NAME) { 
-        Ok(settings) => {
-            app_state.0.lock().expect("Failed to lock app_state").settings = settings.clone();
-            match confy::get_configuration_file_path(APP_NAME, APP_NAME) {
-                Ok(settings_path) => {
-                    match settings_path.parent() {
-                        Some(settings_dir) => {
-                            let log_path = settings_dir.join(format!("{}.log", APP_NAME));
-                            match simple_logging::log_to_file(log_path.clone(), LevelFilter::Info) {
-                                Ok(_) => info!("Opened logger at: {}", log_path.display()),
-                                Err(e) => log_panic!("Failed to open logger: {}", e)
-                            }
-                        }
-                        None => log_panic!("Failed to get parent of settings path: {}", settings_path.display())
-                    }
-                }
-                Err(e) => log_panic!("Failed to get settings path: {}", e)
-            }
-            if settings.sprites_path == "".to_string() {
-                select_sprites_path(&app_state);
-            }
-        },
-        Err(e) => log_panic!("Failed to load settings: {}", e)
-    }
-    
-    load_collections_and_animations(&app_state);
-
-    let sprites_path = app_state.0.lock().expect("Failed to lock app_state").settings.sprites_path.clone();
-    async_runtime::spawn(async move {
-        start_watcher(sprites_path);
-    });
 
     let refresh = CustomMenuItem::new("refresh", "Refresh").accelerator("F5");
     let set_sprites_path = CustomMenuItem::new("set_sprites_path", "Set Sprites Path");
@@ -359,6 +328,42 @@ fn setup_app() {
         .expect("Failed to build tauri application.");
 
     app.run(move |app_handle, event| match event {
+        Ready => {
+            let state = app_handle.state::<AppState>();
+            match confy::load::<Settings>(APP_NAME, APP_NAME) { 
+                Ok(settings) => {
+                    state.0.lock().expect("Failed to lock app_state").settings = settings.clone();
+                    match confy::get_configuration_file_path(APP_NAME, APP_NAME) {
+                        Ok(settings_path) => {
+                            match settings_path.parent() {
+                                Some(settings_dir) => {
+                                    let log_path = settings_dir.join(format!("{}.log", APP_NAME));
+                                    match simple_logging::log_to_file(log_path.clone(), LevelFilter::Info) {
+                                        Ok(_) => info!("Opened logger at: {}", log_path.display()),
+                                        Err(e) => log_panic!("Failed to open logger: {}", e)
+                                    }
+                                }
+                                None => log_panic!("Failed to get parent of settings path: {}", settings_path.display())
+                            }
+                        }
+                        Err(e) => log_panic!("Failed to get settings path: {}", e)
+                    }
+                    if settings.sprites_path == "".to_string() {
+                        select_sprites_path(&state);
+                    }
+                },
+                Err(e) => log_panic!("Failed to load settings: {}", e)
+            }
+
+            info!("Sprites path: {:?}", state.0.lock().expect("Failed to lock app_state").settings.sprites_path);
+
+            load_collections_and_animations(&state);
+
+            let sprites_path = state.0.lock().expect("Failed to lock app_state").settings.sprites_path.clone();
+            async_runtime::spawn(async move {
+                start_watcher(sprites_path);
+            });
+        },
         ExitRequested { api, .. } => {
             api.prevent_exit(); 
 

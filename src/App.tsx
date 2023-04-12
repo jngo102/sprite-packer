@@ -259,7 +259,6 @@ export default class App extends React.Component<{}, AppState> {
           stateChangedSprites.push(sprite)
         }
       }
-      console.log("Num changed sprites: " + stateChangedSprites.length)
       this.setState({ changedSprites: stateChangedSprites })
     })
   }
