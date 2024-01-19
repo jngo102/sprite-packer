@@ -42,7 +42,7 @@ jobs:
       - name: Setup node
         uses: actions/setup-node@v1
         with:
-          node-version: latest
+          node-version: 20
       - name: Install Rust
         uses: actions-rs/toolchain@v1
         with:
