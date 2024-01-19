@@ -1,0 +1,18 @@
+export default {
+  animations: 'Animationen',
+  atlases: 'Atlanten',
+  cancel: 'Abbrechen',
+  changedSprites: 'Geänderte Sprites',
+  check: 'Überprüfen',
+  clips: 'Clips',
+  duplicates: 'Duplicates',
+  findDuplicates: 'Duplicates finden',
+  frames: 'Frames',
+  language: 'Sprache',
+  pack: 'Packen',
+  packing: 'Packen ',
+  quit: 'Beenden',
+  refresh: 'Aktualisieren',
+  replaceDuplicates: 'Duplicates ersetzen',
+  setSpritesPath: 'Pfad für Sprites festlegen',
+};

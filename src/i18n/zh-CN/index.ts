@@ -1,0 +1,18 @@
+export default {
+  animations: '动画',
+  atlases: '图集',
+  cancel: '取消',
+  changedSprites: '更改的精灵',
+  check: '检查',
+  clips: '剪辑',
+  duplicates: '重复项',
+  findDuplicates: '查找重复项',
+  frames: '帧',
+  language: '语言',
+  pack: '打包',
+  packing: '打包中',
+  quit: '退出',
+  refresh: '刷新',
+  replaceDuplicates: '替换重复项',
+  setSpritesPath: '设置精灵路径',
+};

@@ -1,0 +1,18 @@
+export default {
+  animations: 'Animations',
+  atlases: 'Atlas',
+  cancel: 'Annuler',
+  changedSprites: 'Sprites modifiés',
+  check: 'Vérifier',
+  clips: 'Vitesses',
+  duplicates: 'Duplicates',
+  findDuplicates: 'Trouver Duplicates',
+  frames: 'Images',
+  language: 'Langue',
+  pack: 'Pack',
+  packing: 'Packaging',
+  quit: 'Quitter',
+  refresh: 'Rafraîchir',
+  replaceDuplicates: 'Remplacer Duplicates',
+  setSpritesPath: 'Définir le chemin des sprites',
+};
